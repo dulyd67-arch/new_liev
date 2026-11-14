@@ -1,0 +1,828 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DATABASE_MIGRATION_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETION_PENDING
+  DELETED
+}
+
+enum SessionClientType {
+  WEB
+  MOBILE
+}
+
+enum AuthChallengeKind {
+  PASSWORD_RESET
+  EMAIL_VERIFY
+}
+
+enum StreamStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  TERMINATED
+}
+
+enum LedgerUnit {
+  LIVECOIN
+  USD_MICRO
+}
+
+enum LedgerAccountKind {
+  COIN_WALLET
+  COIN_ISSUANCE
+  COIN_REDEMPTION
+  PROVIDER_CLEARING
+  DEFERRED_GIFT_REVENUE
+  CREATOR_PENDING
+  CREATOR_AVAILABLE
+  CREATOR_HELD
+  PLATFORM_REVENUE
+  PROCESSING_FEES
+  TAX_PAYABLE
+  REFUND_RESERVE
+  PAYOUT_CLEARING
+  ROUNDING
+}
+
+enum PaymentProvider {
+  STRIPE
+  APPLE
+  GOOGLE
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  PAID
+  SETTLED
+  FAILED
+  REFUNDED
+  DISPUTED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
+
+enum EarningStatus {
+  PENDING
+  AVAILABLE
+  HELD
+  REVERSED
+}
+
+enum PayoutStatus {
+  REQUESTED
+  REVIEW
+  APPROVED
+  PROCESSING
+  PAID
+  FAILED
+  REJECTED
+  CANCELED
+}
+
+enum VerificationStatus {
+  NOT_STARTED
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum RefundStatus {
+  REQUESTED
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum DisputeStatus {
+  OPEN
+  WON
+  LOST
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+enum ModerationActionType {
+  WARN
+  MUTE
+  BLOCK
+  SUSPEND
+  TERMINATE_STREAM
+  REMOVE_MESSAGE
+}
+
+model User {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  email                String                 @unique @db.VarChar(320)
+  passwordHash         String?                @map("password_hash")
+  status               UserStatus             @default(ACTIVE)
+  emailVerifiedAt      DateTime?              @map("email_verified_at") @db.Timestamptz(6)
+  ageVerifiedAt        DateTime?              @map("age_verified_at") @db.Timestamptz(6)
+  birthDate            DateTime?              @map("birth_date") @db.Date
+  ageAttestedAt        DateTime?              @map("age_attested_at") @db.Timestamptz(6)
+  termsAcceptedAt      DateTime?              @map("terms_accepted_at") @db.Timestamptz(6)
+  termsVersion         String?                @map("terms_version") @db.VarChar(80)
+  privacyAcceptedAt    DateTime?              @map("privacy_accepted_at") @db.Timestamptz(6)
+  privacyVersion       String?                @map("privacy_version") @db.VarChar(80)
+  createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt            DateTime?              @map("deleted_at") @db.Timestamptz(6)
+  profile              UserProfile?
+  roles                UserRole[]
+  sessions             Session[]
+  authChallenges       AuthChallenge[]
+  streams              LiveStream[]
+  viewings             StreamViewer[]
+  following            Follow[]               @relation("Following")
+  followers            Follow[]               @relation("Followers")
+  sentMessages         LiveMessage[]
+  blocks               UserBlock[]            @relation("Blocker")
+  blockedBy            UserBlock[]            @relation("Blocked")
+  mutes                StreamMute[]           @relation("MutedUser")
+  imposedMutes         StreamMute[]           @relation("MutingModerator")
+  wallet               CoinWallet?
+  ledgerAccounts       LedgerAccount[]
+  paymentOrders        PaymentOrder[]
+  sentGifts            GiftTransaction[]      @relation("GiftSender")
+  receivedGifts        GiftTransaction[]      @relation("GiftCreator")
+  earnings             CreatorEarning[]
+  payoutAccounts       PayoutAccount[]
+  payoutRequests       PayoutRequest[]
+  identityChecks       IdentityVerification[]
+  notifications        Notification[]
+  reports              Report[]               @relation("Reporter")
+  reportsAgainst       Report[]               @relation("ReportedUser")
+  moderationActions    ModerationAction[]     @relation("Moderator")
+  moderationReceived   ModerationAction[]     @relation("ModerationTarget")
+  auditLogs            AdminAuditLog[]
+  revenuePolicies      RevenueSplit[]
+
+  @@index([status, createdAt])
+  @@map("users")
+}
+
+model UserProfile {
+  userId      String   @id @map("user_id") @db.Uuid
+  username    String   @unique @db.VarChar(32)
+  displayName String   @map("display_name") @db.VarChar(80)
+  bio         String?  @db.VarChar(500)
+  avatarKey   String?  @map("avatar_key")
+  locale      String   @default("ar") @db.VarChar(10)
+  countryCode String?  @map("country_code") @db.Char(2)
+  timezone    String   @default("UTC") @db.VarChar(64)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model Role {
+  id          String     @id @default(uuid()) @db.Uuid
+  name        String     @unique @db.VarChar(32)
+  permissions String[]
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model Session {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  refreshTokenHash  String    @unique @map("refresh_token_hash")
+  familyId          String    @map("family_id") @db.Uuid
+  clientType        SessionClientType @default(WEB) @map("client_type")
+  replacedById      String?   @unique @map("replaced_by_id") @db.Uuid
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy        Session?  @relation("SessionRotation", fields: [replacedById], references: [id], onDelete: Restrict)
+  replaces          Session?  @relation("SessionRotation")
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Only SHA-256 hashes of random, single-use tokens are persisted.
+model AuthChallenge {
+  id         String            @id @default(uuid()) @db.Uuid
+  userId     String            @map("user_id") @db.Uuid
+  kind       AuthChallengeKind
+  tokenHash  String            @unique @map("token_hash") @db.Char(64)
+  expiresAt  DateTime          @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime?         @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind, expiresAt])
+  @@index([expiresAt])
+  @@map("auth_challenges")
+}
+
+model LiveStream {
+  id             String             @id @default(uuid()) @db.Uuid
+  creatorId      String             @map("creator_id") @db.Uuid
+  title          String             @db.VarChar(160)
+  description    String?            @db.VarChar(2000)
+  language       String             @default("ar") @db.VarChar(10)
+  category       String?            @db.VarChar(80)
+  status         StreamStatus       @default(SCHEDULED)
+  livekitRoom    String             @unique @map("livekit_room")
+  thumbnailKey   String?            @map("thumbnail_key")
+  startedAt      DateTime?          @map("started_at") @db.Timestamptz(6)
+  endedAt        DateTime?          @map("ended_at") @db.Timestamptz(6)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  creator        User               @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  viewers        StreamViewer[]
+  messages       LiveMessage[]
+  gifts          GiftTransaction[]
+  reports        Report[]
+  moderation     ModerationAction[]
+  mutes          StreamMute[]
+
+  @@index([status, createdAt])
+  @@index([creatorId, createdAt])
+  @@index([category, status])
+  @@map("live_streams")
+}
+
+model StreamViewer {
+  id        String    @id @default(uuid()) @db.Uuid
+  streamId  String    @map("stream_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  joinedAt  DateTime  @default(now()) @map("joined_at") @db.Timestamptz(6)
+  leftAt    DateTime? @map("left_at") @db.Timestamptz(6)
+  stream    LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([streamId, leftAt])
+  @@index([userId, joinedAt])
+  @@map("stream_viewers")
+}
+
+model Follow {
+  followerId String   @map("follower_id") @db.Uuid
+  followedId String   @map("followed_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  follower   User     @relation("Following", fields: [followerId], references: [id], onDelete: Cascade)
+  followed   User     @relation("Followers", fields: [followedId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, followedId])
+  @@index([followedId, createdAt])
+  @@map("follows")
+}
+
+model UserBlock {
+  blockerId String   @map("blocker_id") @db.Uuid
+  blockedId String   @map("blocked_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  blocker   User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("user_blocks")
+}
+
+model StreamMute {
+  id          String     @id @default(uuid()) @db.Uuid
+  streamId    String     @map("stream_id") @db.Uuid
+  userId      String     @map("user_id") @db.Uuid
+  moderatorId String     @map("moderator_id") @db.Uuid
+  expiresAt   DateTime?  @map("expires_at") @db.Timestamptz(6)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  stream      LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  user        User       @relation("MutedUser", fields: [userId], references: [id], onDelete: Cascade)
+  moderator   User       @relation("MutingModerator", fields: [moderatorId], references: [id], onDelete: Restrict)
+
+  @@unique([streamId, userId])
+  @@index([moderatorId])
+  @@map("stream_mutes")
+}
+
+model LiveMessage {
+  id        String    @id @default(uuid()) @db.Uuid
+  streamId  String    @map("stream_id") @db.Uuid
+  senderId  String    @map("sender_id") @db.Uuid
+  body      String    @db.VarChar(1000)
+  removedAt DateTime? @map("removed_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  stream    LiveStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  sender    User       @relation(fields: [senderId], references: [id], onDelete: Restrict)
+  reports   Report[]
+
+  @@index([streamId, createdAt, id])
+  @@index([senderId, createdAt])
+  @@map("live_messages")
+}
+
+model Gift {
+  id             String            @id @default(uuid()) @db.Uuid
+  code           String            @unique @db.VarChar(40)
+  nameAr         String            @map("name_ar") @db.VarChar(80)
+  nameEn         String            @map("name_en") @db.VarChar(80)
+  priceCoins     BigInt            @map("price_coins")
+  imageKey       String?           @map("image_key")
+  animationKey   String?           @map("animation_key")
+  active         Boolean           @default(false)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  transactions   GiftTransaction[]
+
+  @@index([active, priceCoins])
+  @@map("gifts")
+}
+
+model CoinPackage {
+  id                String         @id @default(uuid()) @db.Uuid
+  code              String         @unique @db.VarChar(40)
+  coins             BigInt
+  currency          String         @db.Char(3)
+  currencyExponent  Int            @map("currency_exponent") @db.SmallInt
+  priceMinor        BigInt         @map("price_minor")
+  provider          PaymentProvider
+  providerProductId String?        @map("provider_product_id")
+  countryCode       String?        @map("country_code") @db.Char(2)
+  active            Boolean        @default(false)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  orders            PaymentOrder[]
+
+  @@unique([provider, providerProductId, countryCode])
+  @@index([provider, countryCode, active])
+  @@map("coin_packages")
+}
+
+/// Each unit is a separate book; LIVECOIN entries can never balance USD entries.
+model LedgerAccount {
+  id                 String            @id @default(uuid()) @db.Uuid
+  ownerId            String?           @map("owner_id") @db.Uuid
+  code               String            @unique @db.VarChar(120)
+  unit               LedgerUnit
+  kind               LedgerAccountKind
+  balance            BigInt            @default(0)
+  enforceNonNegative Boolean           @default(false) @map("enforce_non_negative")
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  owner              User?             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  entries            WalletLedger[]
+  coinWallet         CoinWallet?
+
+  @@unique([id, unit])
+  @@index([ownerId, kind, unit])
+  @@map("ledger_accounts")
+}
+
+model LedgerJournal {
+  id                String          @id @default(uuid()) @db.Uuid
+  unit              LedgerUnit
+  idempotencyKey    String          @unique @map("idempotency_key") @db.VarChar(200)
+  requestHash       String          @map("request_hash") @db.Char(64)
+  sourceType        String          @map("source_type") @db.VarChar(50)
+  sourceId          String          @map("source_id") @db.VarChar(200)
+  description       String?         @db.VarChar(500)
+  reversesJournalId String?         @unique @map("reverses_journal_id") @db.Uuid
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  entries           WalletLedger[]
+  reverses          LedgerJournal?  @relation("LedgerReversal", fields: [reversesJournalId], references: [id], onDelete: Restrict)
+  reversal          LedgerJournal?  @relation("LedgerReversal")
+
+  @@unique([id, unit])
+  @@index([sourceType, sourceId])
+  @@index([createdAt])
+  @@map("ledger_journals")
+}
+
+model WalletLedger {
+  id        String        @id @default(uuid()) @db.Uuid
+  journalId String        @map("journal_id") @db.Uuid
+  accountId String        @map("account_id") @db.Uuid
+  unit      LedgerUnit
+  amount    BigInt
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  journal   LedgerJournal @relation(fields: [journalId, unit], references: [id, unit], onDelete: Restrict)
+  account   LedgerAccount @relation(fields: [accountId, unit], references: [id, unit], onDelete: Restrict)
+
+  @@unique([journalId, accountId])
+  @@index([accountId, createdAt, id])
+  @@map("wallet_ledger")
+}
+
+model CoinWallet {
+  id              String        @id @default(uuid()) @db.Uuid
+  userId          String        @unique @map("user_id") @db.Uuid
+  ledgerAccountId String        @unique @map("ledger_account_id") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  ledgerAccount   LedgerAccount @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+  lots            CoinLot[]
+  gifts           GiftTransaction[]
+
+  @@map("coin_wallets")
+}
+
+/// Attribution uses settled provider proceeds; no universal coin-to-dollar rate.
+model PaymentOrder {
+  id                       String          @id @default(uuid()) @db.Uuid
+  userId                   String          @map("user_id") @db.Uuid
+  packageId                String          @map("package_id") @db.Uuid
+  provider                 PaymentProvider
+  providerOrderId          String?         @map("provider_order_id") @db.VarChar(200)
+  idempotencyKey           String          @unique @map("idempotency_key") @db.VarChar(200)
+  status                   PaymentStatus   @default(CREATED)
+  coins                    BigInt
+  currency                 String          @db.Char(3)
+  currencyExponent         Int             @map("currency_exponent") @db.SmallInt
+  amountMinor              BigInt          @map("amount_minor")
+  fxRateToUsd              Decimal?        @map("fx_rate_to_usd") @db.Decimal(30, 12)
+  fxObservedAt             DateTime?       @map("fx_observed_at") @db.Timestamptz(6)
+  fxSource                 String?         @map("fx_source") @db.VarChar(100)
+  grossUsdMicros           BigInt?         @map("gross_usd_micros")
+  processingFeeUsdMicros   BigInt?         @map("processing_fee_usd_micros")
+  taxUsdMicros             BigInt?         @map("tax_usd_micros")
+  settledNetUsdMicros      BigInt?         @map("settled_net_usd_micros")
+  settlementReference     String?         @map("settlement_reference") @db.VarChar(200)
+  paidAt                   DateTime?       @map("paid_at") @db.Timestamptz(6)
+  settledAt                DateTime?       @map("settled_at") @db.Timestamptz(6)
+  createdAt                DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user                     User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  package                  CoinPackage     @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  lot                      CoinLot?
+  webhooks                 PaymentWebhook[]
+  refunds                  Refund[]
+  disputes                 Dispute[]
+
+  @@unique([provider, providerOrderId])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("payment_orders")
+}
+
+model PaymentWebhook {
+  id              String          @id @default(uuid()) @db.Uuid
+  provider        PaymentProvider
+  providerEventId String          @map("provider_event_id") @db.VarChar(200)
+  paymentOrderId  String?         @map("payment_order_id") @db.Uuid
+  payloadSha256   String          @map("payload_sha256") @db.Char(64)
+  payloadObjectKey String?        @map("payload_object_key")
+  signatureVerifiedAt DateTime    @map("signature_verified_at") @db.Timestamptz(6)
+  status          WebhookStatus   @default(RECEIVED)
+  attempts        Int             @default(0)
+  receivedAt      DateTime        @default(now()) @map("received_at") @db.Timestamptz(6)
+  processedAt     DateTime?       @map("processed_at") @db.Timestamptz(6)
+  lastErrorCode   String?         @map("last_error_code") @db.VarChar(100)
+  paymentOrder    PaymentOrder?   @relation(fields: [paymentOrderId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerEventId])
+  @@index([status, receivedAt])
+  @@index([paymentOrderId])
+  @@map("payment_webhooks")
+}
+
+model CoinLot {
+  id                     String            @id @default(uuid()) @db.Uuid
+  walletId               String            @map("wallet_id") @db.Uuid
+  paymentOrderId         String            @unique @map("payment_order_id") @db.Uuid
+  coinsIssued            BigInt            @map("coins_issued")
+  coinsRemaining         BigInt            @map("coins_remaining")
+  settledNetUsdMicros    BigInt            @map("settled_net_usd_micros")
+  allocatedNetUsdMicros  BigInt            @default(0) @map("allocated_net_usd_micros")
+  createdAt              DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  wallet                 CoinWallet        @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  paymentOrder           PaymentOrder      @relation(fields: [paymentOrderId], references: [id], onDelete: Restrict)
+  allocations            GiftAllocation[]
+
+  @@index([walletId, createdAt, id])
+  @@map("coin_lots")
+}
+
+model RevenueSplit {
+  id          String            @id @default(uuid()) @db.Uuid
+  creatorBps  Int               @map("creator_bps") @db.SmallInt
+  platformBps Int               @map("platform_bps") @db.SmallInt
+  effectiveAt DateTime          @unique @map("effective_at") @db.Timestamptz(6)
+  createdById String?           @map("created_by_id") @db.Uuid
+  reason      String            @db.VarChar(500)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy   User?             @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  gifts       GiftTransaction[]
+
+  @@map("revenue_splits")
+}
+
+model GiftTransaction {
+  id                    String            @id @default(uuid()) @db.Uuid
+  idempotencyKey        String            @unique @map("idempotency_key") @db.VarChar(200)
+  senderId              String            @map("sender_id") @db.Uuid
+  creatorId             String            @map("creator_id") @db.Uuid
+  streamId              String            @map("stream_id") @db.Uuid
+  walletId              String            @map("wallet_id") @db.Uuid
+  giftId                String            @map("gift_id") @db.Uuid
+  revenueSplitId        String            @map("revenue_split_id") @db.Uuid
+  quantity              Int
+  unitPriceCoins        BigInt            @map("unit_price_coins")
+  totalCoins            BigInt            @map("total_coins")
+  eligibleNetUsdMicros  BigInt            @map("eligible_net_usd_micros")
+  creatorBps            Int               @map("creator_bps") @db.SmallInt
+  platformBps           Int               @map("platform_bps") @db.SmallInt
+  creatorUsdMicros      BigInt            @map("creator_usd_micros")
+  platformUsdMicros     BigInt            @map("platform_usd_micros")
+  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  sender                User              @relation("GiftSender", fields: [senderId], references: [id], onDelete: Restrict)
+  creator               User              @relation("GiftCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  stream                LiveStream        @relation(fields: [streamId], references: [id], onDelete: Restrict)
+  wallet                CoinWallet        @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  gift                  Gift              @relation(fields: [giftId], references: [id], onDelete: Restrict)
+  revenueSplit          RevenueSplit      @relation(fields: [revenueSplitId], references: [id], onDelete: Restrict)
+  allocations           GiftAllocation[]
+  earning               CreatorEarning?
+
+  @@index([creatorId, createdAt])
+  @@index([senderId, createdAt])
+  @@index([streamId, createdAt])
+  @@index([giftId])
+  @@index([walletId])
+  @@index([revenueSplitId])
+  @@map("gift_transactions")
+}
+
+model GiftAllocation {
+  id                   String          @id @default(uuid()) @db.Uuid
+  giftTransactionId    String          @map("gift_transaction_id") @db.Uuid
+  coinLotId            String          @map("coin_lot_id") @db.Uuid
+  coins                BigInt
+  eligibleNetUsdMicros BigInt          @map("eligible_net_usd_micros")
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  giftTransaction      GiftTransaction @relation(fields: [giftTransactionId], references: [id], onDelete: Restrict)
+  coinLot              CoinLot         @relation(fields: [coinLotId], references: [id], onDelete: Restrict)
+
+  @@unique([giftTransactionId, coinLotId])
+  @@index([coinLotId])
+  @@map("gift_allocations")
+}
+
+model CreatorEarning {
+  id                String          @id @default(uuid()) @db.Uuid
+  creatorId         String          @map("creator_id") @db.Uuid
+  giftTransactionId String          @unique @map("gift_transaction_id") @db.Uuid
+  amountUsdMicros   BigInt          @map("amount_usd_micros")
+  status            EarningStatus   @default(PENDING)
+  availableAt       DateTime?       @map("available_at") @db.Timestamptz(6)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  creator           User            @relation(fields: [creatorId], references: [id], onDelete: Restrict)
+  giftTransaction   GiftTransaction @relation(fields: [giftTransactionId], references: [id], onDelete: Restrict)
+
+  @@index([creatorId, status, availableAt])
+  @@map("creator_earnings")
+}
+
+model PayoutAccount {
+  id                      String              @id @default(uuid()) @db.Uuid
+  userId                  String              @map("user_id") @db.Uuid
+  provider                String              @db.VarChar(50)
+  providerAccountRef      String              @map("provider_account_ref") @db.VarChar(200)
+  countryCode             String              @map("country_code") @db.Char(2)
+  currency                String              @db.Char(3)
+  verifiedAt              DateTime?           @map("verified_at") @db.Timestamptz(6)
+  disabledAt              DateTime?           @map("disabled_at") @db.Timestamptz(6)
+  complianceCheckedAt     DateTime?           @map("compliance_checked_at") @db.Timestamptz(6)
+  complianceReference     String?             @map("compliance_reference") @db.VarChar(200)
+  createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                    User                @relation(fields: [userId], references: [id], onDelete: Restrict)
+  requests                PayoutRequest[]
+
+  @@unique([provider, providerAccountRef])
+  @@index([userId, disabledAt])
+  @@map("payout_accounts")
+}
+
+model PayoutRequest {
+  id                      String          @id @default(uuid()) @db.Uuid
+  userId                  String          @map("user_id") @db.Uuid
+  payoutAccountId         String          @map("payout_account_id") @db.Uuid
+  provider                String          @db.VarChar(50)
+  idempotencyKey          String          @unique @map("idempotency_key") @db.VarChar(200)
+  amountUsdMicros         BigInt          @map("amount_usd_micros")
+  feeUsdMicros            BigInt          @default(0) @map("fee_usd_micros")
+  currency                String          @db.Char(3)
+  currencyExponent        Int             @map("currency_exponent") @db.SmallInt
+  amountMinor             BigInt          @map("amount_minor")
+  fxRateFromUsd           Decimal         @map("fx_rate_from_usd") @db.Decimal(30, 12)
+  fxObservedAt            DateTime        @map("fx_observed_at") @db.Timestamptz(6)
+  fxSource                String          @map("fx_source") @db.VarChar(100)
+  providerTransferId      String?         @map("provider_transfer_id") @db.VarChar(200)
+  status                  PayoutStatus    @default(REQUESTED)
+  rejectionReasonCode     String?         @map("rejection_reason_code") @db.VarChar(100)
+  requestedAt             DateTime        @default(now()) @map("requested_at") @db.Timestamptz(6)
+  processedAt             DateTime?       @map("processed_at") @db.Timestamptz(6)
+  user                    User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  payoutAccount           PayoutAccount   @relation(fields: [payoutAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerTransferId])
+  @@index([payoutAccountId])
+  @@index([userId, requestedAt])
+  @@index([status, requestedAt])
+  @@map("payout_requests")
+}
+
+/// Store external KYC references, never raw identity documents in application tables.
+model IdentityVerification {
+  id                  String             @id @default(uuid()) @db.Uuid
+  userId              String             @map("user_id") @db.Uuid
+  provider            String             @db.VarChar(50)
+  providerReference   String             @map("provider_reference") @db.VarChar(200)
+  status              VerificationStatus @default(NOT_STARTED)
+  countryCode         String             @map("country_code") @db.Char(2)
+  ageOverMinimum      Boolean            @default(false) @map("age_over_minimum")
+  sanctionsClearedAt  DateTime?          @map("sanctions_cleared_at") @db.Timestamptz(6)
+  verifiedAt          DateTime?          @map("verified_at") @db.Timestamptz(6)
+  expiresAt           DateTime?          @map("expires_at") @db.Timestamptz(6)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerReference])
+  @@index([userId, status])
+  @@map("identity_verifications")
+}
+
+model Refund {
+  id                  String          @id @default(uuid()) @db.Uuid
+  paymentOrderId      String          @map("payment_order_id") @db.Uuid
+  providerRefundId    String          @map("provider_refund_id") @db.VarChar(200)
+  idempotencyKey      String          @unique @map("idempotency_key") @db.VarChar(200)
+  amountMinor         BigInt          @map("amount_minor")
+  currency            String          @db.Char(3)
+  currencyExponent    Int             @map("currency_exponent") @db.SmallInt
+  amountUsdMicros     BigInt          @map("amount_usd_micros")
+  fxRateToUsd        Decimal         @map("fx_rate_to_usd") @db.Decimal(30, 12)
+  fxObservedAt       DateTime        @map("fx_observed_at") @db.Timestamptz(6)
+  fxSource           String          @map("fx_source") @db.VarChar(100)
+  processingFeeUsdMicros BigInt       @default(0) @map("processing_fee_usd_micros")
+  reasonCode          String          @map("reason_code") @db.VarChar(100)
+  status              RefundStatus    @default(REQUESTED)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  processedAt         DateTime?       @map("processed_at") @db.Timestamptz(6)
+  paymentOrder        PaymentOrder    @relation(fields: [paymentOrderId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentOrderId, providerRefundId])
+  @@index([status, createdAt])
+  @@map("refunds")
+}
+
+model Dispute {
+  id                 String          @id @default(uuid()) @db.Uuid
+  paymentOrderId     String          @map("payment_order_id") @db.Uuid
+  providerDisputeId  String          @map("provider_dispute_id") @db.VarChar(200)
+  currency           String          @db.Char(3)
+  currencyExponent   Int             @map("currency_exponent") @db.SmallInt
+  amountMinor        BigInt          @map("amount_minor")
+  amountUsdMicros    BigInt          @map("amount_usd_micros")
+  fxRateToUsd        Decimal         @map("fx_rate_to_usd") @db.Decimal(30, 12)
+  fxObservedAt       DateTime        @map("fx_observed_at") @db.Timestamptz(6)
+  fxSource           String          @map("fx_source") @db.VarChar(100)
+  feeUsdMicros       BigInt          @default(0) @map("fee_usd_micros")
+  status             DisputeStatus   @default(OPEN)
+  openedAt           DateTime        @default(now()) @map("opened_at") @db.Timestamptz(6)
+  resolvedAt         DateTime?       @map("resolved_at") @db.Timestamptz(6)
+  paymentOrder       PaymentOrder    @relation(fields: [paymentOrderId], references: [id], onDelete: Restrict)
+
+  @@unique([paymentOrderId, providerDisputeId])
+  @@index([status, openedAt])
+  @@map("disputes")
+}
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  type      String    @db.VarChar(50)
+  data      Json
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model Report {
+  id            String        @id @default(uuid()) @db.Uuid
+  reporterId    String        @map("reporter_id") @db.Uuid
+  targetUserId  String?       @map("target_user_id") @db.Uuid
+  streamId      String?       @map("stream_id") @db.Uuid
+  messageId     String?       @map("message_id") @db.Uuid
+  reasonCode    String        @map("reason_code") @db.VarChar(100)
+  details       String?       @db.VarChar(2000)
+  status        ReportStatus  @default(OPEN)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  resolvedAt    DateTime?     @map("resolved_at") @db.Timestamptz(6)
+  reporter      User          @relation("Reporter", fields: [reporterId], references: [id], onDelete: Restrict)
+  targetUser    User?         @relation("ReportedUser", fields: [targetUserId], references: [id], onDelete: Restrict)
+  stream        LiveStream?   @relation(fields: [streamId], references: [id], onDelete: Restrict)
+  message       LiveMessage?  @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  actions       ModerationAction[]
+
+  @@index([status, createdAt])
+  @@index([reporterId])
+  @@index([targetUserId])
+  @@index([streamId])
+  @@index([messageId])
+  @@map("reports")
+}
+
+model ModerationAction {
+  id           String               @id @default(uuid()) @db.Uuid
+  moderatorId  String               @map("moderator_id") @db.Uuid
+  targetUserId String?              @map("target_user_id") @db.Uuid
+  streamId     String?              @map("stream_id") @db.Uuid
+  reportId     String?              @map("report_id") @db.Uuid
+  type         ModerationActionType
+  reason       String               @db.VarChar(1000)
+  expiresAt    DateTime?            @map("expires_at") @db.Timestamptz(6)
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  moderator    User                 @relation("Moderator", fields: [moderatorId], references: [id], onDelete: Restrict)
+  targetUser   User?                @relation("ModerationTarget", fields: [targetUserId], references: [id], onDelete: Restrict)
+  stream       LiveStream?          @relation(fields: [streamId], references: [id], onDelete: Restrict)
+  report       Report?              @relation(fields: [reportId], references: [id], onDelete: Restrict)
+
+  @@index([targetUserId, createdAt])
+  @@index([moderatorId])
+  @@index([streamId])
+  @@index([reportId])
+  @@map("moderation_actions")
+}
+
+model AdminAuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorId     String?  @map("actor_id") @db.Uuid
+  action      String   @db.VarChar(100)
+  entityType  String   @map("entity_type") @db.VarChar(100)
+  entityId    String?  @map("entity_id") @db.VarChar(200)
+  before      Json?
+  after       Json?
+  requestId   String   @map("request_id") @db.VarChar(100)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  actor       User?    @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("admin_audit_logs")
+}
+
+model PlatformSetting {
+  key       String   @id @db.VarChar(120)
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("platform_settings")
+}
+
+/// Written atomically alongside domain transactions, delivered at least once.
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  topic         String    @db.VarChar(100)
+  aggregateId   String    @map("aggregate_id") @db.VarChar(200)
+  payload       Json
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  availableAt   DateTime  @default(now()) @map("available_at") @db.Timestamptz(6)
+  publishedAt   DateTime? @map("published_at") @db.Timestamptz(6)
+  attempts      Int       @default(0)
+  lockedUntil   DateTime? @map("locked_until") @db.Timestamptz(6)
+
+  @@index([publishedAt, availableAt])
+  @@index([aggregateId])
+  @@map("outbox_events")
+}

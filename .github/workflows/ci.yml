@@ -1,0 +1,74 @@
+name: LiveStar verification
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6-bookworm
+        env:
+          POSTGRES_DB: livestar_test
+          POSTGRES_USER: livestar_owner
+          POSTGRES_PASSWORD: ci_owner_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U livestar_owner -d livestar_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4.6-bookworm
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.27.4
+        ports: ["1025:1025", "8025:8025"]
+    env:
+      DATABASE_URL: postgresql://livestar_app:ci_app_password@localhost:5432/livestar_test?schema=public
+      DATABASE_MIGRATION_URL: postgresql://livestar_owner:ci_owner_password@localhost:5432/livestar_test?schema=public
+      REDIS_URL: redis://localhost:6379
+      WEB_ORIGIN: http://localhost:3000
+      NODE_ENV: test
+      JWT_SECRET: livestar_ci_test_signing_key_not_for_production_2026
+      JWT_ISSUER: livestar
+      JWT_AUDIENCE: livestar-clients
+      APP_PUBLIC_URL: http://localhost:3000
+      SMTP_HOST: localhost
+      SMTP_PORT: "1025"
+      SMTP_FROM: noreply@livestar.local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Create restricted application role
+        run: bash infra/postgres/10-app-role.sh
+        env:
+          PGHOST: localhost
+          PGPASSWORD: ci_owner_password
+          POSTGRES_DB: livestar_test
+          POSTGRES_USER: livestar_owner
+          APP_DB_PASSWORD: ci_app_password
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npm run db:validate
+      - run: npm run db:migrate
+      - run: npm run db:seed
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:free
+      - run: npm run db:test
+      - run: npm run test:auth:integration
+      - run: npm run db:check-static
+      - name: Validate development compose
+        run: cp .env.example .env && docker compose --profile app --profile storage --profile media --profile gateway config --quiet

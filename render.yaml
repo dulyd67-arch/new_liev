@@ -1,0 +1,32 @@
+# One free HTTP service only. PostgreSQL and media use separately chosen free plans.
+services:
+  - type: web
+    name: livestar-live
+    runtime: docker
+    plan: free
+    dockerfilePath: ./infra/docker/free.Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health/ready
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: REDIS_OPTIONAL
+        value: "true"
+      - key: EMAIL_ENABLED
+        value: "false"
+      - key: AUTH_HASH_CONCURRENCY
+        value: "1"
+      - key: API_DOCS_ENABLED
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_MIGRATION_URL
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false

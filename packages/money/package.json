@@ -1,0 +1,20 @@
+{
+  "name": "@livestar/money",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Exact accounting arithmetic for LiveStar; no payment execution.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "engines": { "node": ">=22" },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

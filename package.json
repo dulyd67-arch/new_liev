@@ -1,0 +1,49 @@
+{
+  "name": "livestar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LiveStar — simple live video and chat platform",
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.13 <25",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "db:validate": "npm run validate --workspace @livestar/database",
+    "db:generate": "npm run generate --workspace @livestar/database",
+    "db:migrate": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
+    "db:deploy": "npm run db:migrate && npm run db:seed",
+    "db:seed": "tsx packages/database/prisma/seed.ts",
+    "db:test": "tsx --test packages/database/test/*.test.ts",
+    "build:api": "npm run build --workspace @livestar/database && npm run build --workspace @livestar/money && npm run build --workspace @livestar/api",
+    "build": "npm run build:api && npm run build --workspace @livestar/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "dev:api": "npm run dev --workspace @livestar/api",
+    "start:api": "npm run start --workspace @livestar/api",
+    "dev:web": "npm run dev --workspace @livestar/web",
+    "dev:live": "node scripts/dev-live.mjs",
+    "start:web": "npm run start --workspace @livestar/web",
+    "start:free": "node scripts/start-free.mjs",
+    "check": "npm run db:validate && npm run db:generate && npm run build && npm run typecheck && npm test",
+    "db:check-static": "python3 -m unittest discover -s packages/database/test -p 'test_*.py' -v",
+    "test:offline": "node scripts/test-offline.mjs",
+    "test:auth:integration": "node --test scripts/auth.integration.test.mjs",
+    "test:live:integration": "node --test scripts/live.integration.test.mjs",
+    "test:live:browser": "node --test scripts/live.browser.test.mjs",
+    "test:free": "node --test scripts/start-free.test.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.5",
+    "pg": "^8.16.3",
+    "prisma": "6.19.0",
+    "tsx": "^4.20.6",
+    "typescript": "~5.9.3"
+  }
+}
