@@ -9,6 +9,7 @@ import { ApiError, RequireAuth, useAuth, useErrorMessage } from '@/lib/auth';
 import { useLocale } from '@/lib/locale';
 import type { LiveStream, StreamMessage, StreamToken } from '@/lib/streams';
 import styles from './studio.module.css';
+import { GiftFeed } from './gift-panel';
 
 type Sheet = 'settings' | 'category' | 'audience' | 'share' | 'end' | null;
 type Phase = 'idle' | 'capture' | 'connect' | 'publish' | 'activate' | 'live' | 'end';
@@ -228,6 +229,7 @@ function Studio() {
     {busy && <div className={styles.connecting} role="status"><LoaderCircle size={25} className="spin" /><p>{phaseLabel}</p><small>{pick('يمكنك الإلغاء من زر الإغلاق في الأعلى.', 'You can cancel with the close button above.')}</small></div>}
     {error && !sheet && <div className={styles.error} role="alert">{error}<button aria-label={pick('إغلاق التنبيه', 'Dismiss alert')} onClick={() => setError('')}><X size={16} /></button></div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
+    {live && stream && <GiftFeed streamId={stream.id} active={live} />}
     <div className={classes(styles.bottom, live && styles.bottomLive)}>
       {live && stream && showChat && <StudioChat streamId={stream.id} />}
       {!live && <div className={styles.previewTools}>

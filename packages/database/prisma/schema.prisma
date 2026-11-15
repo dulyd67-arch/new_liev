@@ -161,6 +161,9 @@ model User {
   mutes                StreamMute[]           @relation("MutedUser")
   imposedMutes         StreamMute[]           @relation("MutingModerator")
   wallet               CoinWallet?
+  duWallet             DuWallet?
+  duTransactions       DuTransaction[]        @relation("DuSender")
+  receivedDuGifts      DuTransaction[]        @relation("DuCreator")
   ledgerAccounts       LedgerAccount[]
   paymentOrders        PaymentOrder[]
   sentGifts            GiftTransaction[]      @relation("GiftSender")
@@ -269,6 +272,7 @@ model LiveStream {
   viewers        StreamViewer[]
   messages       LiveMessage[]
   gifts          GiftTransaction[]
+  duGifts        DuTransaction[]
   reports        Report[]
   moderation     ModerationAction[]
   mutes          StreamMute[]
@@ -347,6 +351,58 @@ model LiveMessage {
   @@index([streamId, createdAt, id])
   @@index([senderId, createdAt])
   @@map("live_messages")
+}
+
+// DU is a free promotional unit. These tables have no financial ledger,
+// payment, creator earnings, exchange rate or redemption relationship.
+model DuWallet {
+  userId    String    @id @map("user_id") @db.Uuid
+  balance   BigInt    @default(0)
+  claimedAt DateTime? @map("claimed_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("du_wallets")
+}
+
+model DuGift {
+  id           String          @id @db.Uuid
+  slug         String          @unique @db.VarChar(40)
+  nameAr       String          @map("name_ar") @db.VarChar(80)
+  nameEn       String          @map("name_en") @db.VarChar(80)
+  emoji        String          @db.VarChar(20)
+  price        BigInt
+  effect       String          @db.VarChar(40)
+  sortOrder    Int             @map("sort_order")
+  transactions DuTransaction[]
+
+  @@map("du_gifts")
+}
+
+model DuTransaction {
+  id             String      @id @default(uuid()) @db.Uuid
+  seq            BigInt      @unique @default(autoincrement())
+  type           String      @db.VarChar(10)
+  userId         String      @map("user_id") @db.Uuid
+  streamId       String?     @map("stream_id") @db.Uuid
+  creatorId      String?     @map("creator_id") @db.Uuid
+  giftId         String?     @map("gift_id") @db.Uuid
+  quantity       BigInt?
+  unitPrice      BigInt?     @map("unit_price")
+  amount         BigInt
+  balanceAfter   BigInt      @map("balance_after")
+  idempotencyKey String      @map("idempotency_key") @db.VarChar(200)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  user           User        @relation("DuSender", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  creator        User?       @relation("DuCreator", fields: [creatorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  stream         LiveStream? @relation(fields: [streamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  gift           DuGift?     @relation(fields: [giftId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, seq])
+  @@index([streamId, seq])
+  @@map("du_transactions")
 }
 
 model Gift {

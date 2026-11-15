@@ -68,6 +68,16 @@ jobs:
       - run: npm test
       - run: npm run test:free
       - run: npm run db:test
+      - name: Start local API for DU integration
+        run: |
+          PORT=4001 npm run start:api > /tmp/livestar-ci-api.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4001/api/v1/health/ready >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/livestar-ci-api.log
+          exit 1
+      - run: npm run test:du:integration
       - run: npm run test:auth:integration
       - run: npm run db:check-static
       - name: Validate development compose

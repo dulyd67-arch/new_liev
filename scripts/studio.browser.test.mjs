@@ -220,7 +220,7 @@ async function run() {
   await host.getByTestId('studio-end').click();
   await host.getByTestId('studio-confirm-end').click();
   await host.waitForURL(`${base}/`);
-  await expect(guest.getByText('This stream has ended. Thanks for sharing the moment.', { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(guest.getByRole('heading', { name: 'This moment has ended', exact: true })).toBeVisible({ timeout: 20_000 });
   assert.equal((await (await request(`/streams/${streamId}`)).json()).status, 'ENDED');
   assert.equal(await mediaEnabled(host, 'video'), false);
   assert.equal(await mediaEnabled(host, 'audio'), false);

@@ -57,8 +57,9 @@ class SchemaStaticTests(unittest.TestCase):
         current = CURRENT_SCHEMA.read_text()
         tables = set(re.findall(r'@@map\("([^"]+)"\)', current))
         self.assertTrue(REQUIRED_TABLES.issubset(tables))
-        self.assertEqual(len(tables), 36)
+        self.assertEqual(len(tables), 39)
         self.assertIn("auth_challenges", tables)
+        self.assertTrue({"du_wallets", "du_gifts", "du_transactions"}.issubset(tables))
         self.assertRegex(current, r"enum SessionClientType\s*\{\s*WEB\s+MOBILE\s*\}")
         self.assertRegex(current, r"birthDate\s+DateTime\?\s+@map\(\"birth_date\"\) @db.Date")
 
