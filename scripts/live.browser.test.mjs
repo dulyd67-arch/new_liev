@@ -85,7 +85,9 @@ test('two browsers: real registration, camera publication, remote video/audio, c
     await discovery.close();
 
     await host.getByTestId('studio-end').click();
-    await expect(host.getByTestId('studio-preview')).toBeVisible({ timeout: 15_000 });
+    await expect(host.getByRole('dialog')).toBeVisible();
+    await host.getByTestId('studio-confirm-end').click();
+    await expect(host).toHaveURL(new URL('/', base).toString(), { timeout: 15_000 });
     await expect(viewer.getByText('This stream has ended. Thanks for sharing the moment.', { exact: true })).toBeVisible({ timeout: 20_000 });
     assert.equal((await (await viewer.request.get(`${base}/api/v1/streams/${streamId}`)).json()).status, 'ENDED');
     assert.deepEqual(errors, [], 'No unhandled application JavaScript errors are allowed.');

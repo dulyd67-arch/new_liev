@@ -35,6 +35,7 @@
     "test:auth:integration": "node --test scripts/auth.integration.test.mjs",
     "test:live:integration": "node --test scripts/live.integration.test.mjs",
     "test:live:browser": "node --test scripts/live.browser.test.mjs",
+    "test:studio:browser": "node scripts/studio.browser.test.mjs",
     "test:free": "node --test scripts/start-free.test.mjs"
   },
   "devDependencies": {

@@ -13,6 +13,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const { pick, locale, setLocale } = useLocale();
   const { user, logout } = useAuth();
   const pathname = usePathname(); const router = useRouter();
+  if (pathname === '/go-live') return <main id="main-content">{children}</main>;
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">{pick('انتقل إلى المحتوى', 'Skip to content')}</a>
     <header className="topbar"><Brand />
