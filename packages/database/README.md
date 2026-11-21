@@ -13,6 +13,8 @@ the latter out of the API and web process environments in production.
 - `prisma/migrations`: versioned SQL, including database-enforced financial rules.
 - `prisma/seed.ts`: idempotent reference configuration; never a user or money seed.
 - `src/index.ts`: shared generated Prisma client exports.
+- `test/pk.test.ts`: LIVE PK invitations, server-clock DU scores, gift-commit races,
+  immutable results, persistent likes and per-user rate limits.
 - `test/ledger.test.ts`: PostgreSQL integration fixtures; requires a dedicated test
   database, all migrations and the configuration seed.
 - `test/auth.test.ts`: registration, consent, session/challenge, least-privilege and
@@ -78,3 +80,35 @@ PII deletion must retain pseudonymized user IDs for financial foreign keys. KYC 
 is limited to external provider references and status; identity documents and banking
 credentials do not belong in these tables. Never store provider secrets in JSON
 settings, audit payloads or outbox events.
+
+
+## LIVE PK and likes
+
+`pk_invite(actor,host_stream,guest_stream,idempotency_uuid,duration_seconds)`
+reserves two existing LIVE streams, with a 60-second invitation and a server-owned
+180- or 300-second battle. `pk_respond(actor,battle,action)` accepts `ACCEPT`,
+`DECLINE`, `CANCEL` or `LEAVE`. The API must bind the actor to its authenticated
+subject and verify both real publishers before inviting or accepting.
+`pk_snapshot(stream)` lazily expires invitations and freezes completed results;
+`pk_settle_stream(stream)` cancels invitations or forfeits active battles when a
+host departs. An early departure awards the available peer the win; both hosts
+unavailable or a block produces no winner. A completed timer uses the higher DU
+score, with a null winner for a tie. Final results and participant identities
+cannot be rewritten.
+
+Scores sum only committed negative `GIFT` amounts in `du_transactions`, for the
+matching stream and creator, from `starts_at` inclusive to `ends_at` exclusive.
+Early settlement also caps the scoring window at settlement time. PK functions
+serialize both streams' DU advisory locks before freezing scores; gift timestamps
+use the wall clock after their locks, so a transaction opened before the deadline
+cannot backdate a late gift. PK functions serialize reservations across both host
+and guest roles, lock users before stream rows, and must run in their own API
+transaction without previously held user or stream row locks. No cron is required.
+
+`stream_send_likes(actor,stream,count,idempotency_uuid)` persists batches of 1–20
+likes, with at most 120 likes per actor in a rolling server-clock minute across
+all streams. A matching retry returns its original event without consuming the
+quota again; a reused key with a different stream or count raises a tagged domain
+error. Totals are exact decimal strings from `sum(count::numeric)`. Both tables
+are read-only to `livestar_app`; only the restricted RPCs can write them. PK and
+likes never create payments, earnings, financial wallets or redeemable balances.

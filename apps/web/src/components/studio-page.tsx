@@ -9,7 +9,10 @@ import { ApiError, RequireAuth, useAuth, useErrorMessage } from '@/lib/auth';
 import { useLocale } from '@/lib/locale';
 import type { LiveStream, StreamMessage, StreamToken } from '@/lib/streams';
 import styles from './studio.module.css';
-import { GiftFeed } from './gift-panel';
+import { GiftFeed, GiftPanel } from './gift-panel';
+import { OpponentFeed } from './opponent-feed';
+import { PkHostControls, PkScoreboard, useBattle } from './pk-controls';
+import { LiveLikeButton } from './live-likes';
 
 type Sheet = 'settings' | 'category' | 'audience' | 'share' | 'end' | null;
 type Phase = 'idle' | 'capture' | 'connect' | 'publish' | 'activate' | 'live' | 'end';
@@ -49,7 +52,7 @@ function BottomSheet({ title, close, children }: { title: string; close: () => v
   </div>;
 }
 
-function StudioChat({ streamId }: { streamId: string }) {
+function StudioChat({ streamId, actions }: { streamId: string; actions?: ReactNode }) {
   const { request } = useAuth(); const { pick } = useLocale(); const errorMessage = useErrorMessage();
   const [items, setItems] = useState<StreamMessage[]>([]); const [body, setBody] = useState(''); const [error, setError] = useState(''); const [sending, setSending] = useState(false);
   const list = useRef<HTMLDivElement>(null);
@@ -71,7 +74,7 @@ function StudioChat({ streamId }: { streamId: string }) {
       {!items.length && <div className={styles.welcome}><ShieldCheck size={17} /><p>{pick('أهلًا بك في LiveStar. شارك باحترام، واحمِ خصوصيتك وخصوصية الآخرين.', 'Welcome to LiveStar. Share respectfully and protect everyone’s privacy.')}</p></div>}
       {items.map(item => <div key={item.id} className={styles.message}><strong>{item.sender.displayName}</strong><span>{item.body}</span></div>)}
     </div>
-    <form className={styles.compose} onSubmit={send}><input data-testid="chat-input" aria-label={pick('رسالتك', 'Your message')} value={body} onChange={event => setBody(event.target.value)} maxLength={500} placeholder={pick('أضف تعليقًا…', 'Add a comment…')} disabled={sending} /><button data-testid="chat-send" type="submit" aria-label={pick('إرسال الرسالة', 'Send message')} disabled={sending || !body.trim()}>{sending ? <LoaderCircle size={19} className="spin" /> : <Send size={19} />}</button></form>
+    <form className={styles.compose} onSubmit={send}><input data-testid="chat-input" aria-label={pick('رسالتك', 'Your message')} value={body} onChange={event => setBody(event.target.value)} maxLength={500} placeholder={pick('أضف تعليقًا…', 'Add a comment…')} disabled={sending} /><button data-testid="chat-send" type="submit" aria-label={pick('إرسال الرسالة', 'Send message')} disabled={sending || !body.trim()}>{sending ? <LoaderCircle size={19} className="spin" /> : <Send size={19} />}</button>{actions}</form>
     {error && <p className={styles.inlineError} role="alert">{error}</p>}
   </div>;
 }
@@ -124,6 +127,10 @@ function Studio() {
     return () => { active = false; window.clearInterval(timer); window.clearInterval(clockTimer); };
   }, [live, stream?.id, request]);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(''), 4000); return () => window.clearTimeout(timer); }, [notice]);
+  const { battle, serverNow: battleNow, refresh: refreshBattle } = useBattle(stream?.id ?? null, live);
+  const duel = live && battle?.status === 'ACTIVE';
+  const ownIsHost = battle?.host.streamId === stream?.id;
+  const opponent = duel && battle ? (ownIsHost ? battle.guest : battle.host) : null;
   const closeSheet = useCallback(() => setSheet(null), []);
   async function preview() {
     if (busy) return; const generation = ++operation.current; setPhase('capture'); setError('');
@@ -217,21 +224,24 @@ function Studio() {
   }
   const shareUrl = stream && typeof window !== 'undefined' ? new URL('/live/' + stream.id, window.location.origin).toString() : '';
   return <div className={styles.stage} data-testid="studio-screen">
-    <video ref={video} className={classes(styles.cameraFeed, mirrored && styles.mirrored, !cameraOn && styles.cameraHidden)} autoPlay muted playsInline aria-label={pick('معاينة الكاميرا', 'Camera preview')} />
+    <video ref={video} className={classes(styles.cameraFeed, mirrored && styles.mirrored, !cameraOn && styles.cameraHidden, duel && styles.pkOwnVideo, duel && (ownIsHost ? styles.pkHost : styles.pkGuest))} data-testid="studio-video" data-stream-id={stream?.id} autoPlay muted playsInline aria-label={pick('معاينة الكاميرا', 'Camera preview')} />
+    {opponent && <OpponentFeed streamId={opponent.streamId} creatorId={opponent.userId} displayName={opponent.displayName} side={ownIsHost ? 'guest' : 'host'} testId="studio-opponent-video" />}
+    {duel && battle && <><strong className={classes(styles.pkOwnName, ownIsHost ? styles.pkHost : styles.pkGuest)}>{name}</strong><div className={styles.pkGiftHost} data-testid="pk-host-gifts"><GiftPanel streamId={battle.host.streamId} isLive={live} isCreator={user?.id === battle.host.userId} recipientName={battle.host.displayName} compact /></div><div className={styles.pkGiftGuest} data-testid="pk-guest-gifts"><GiftPanel streamId={battle.guest.streamId} isLive={live} isCreator={user?.id === battle.guest.userId} recipientName={battle.guest.displayName} compact /></div></>}
     <div className={styles.shade} />
+    {live && <PkScoreboard battle={battle} serverNow={battleNow} streamId={stream?.id} />}
     <header className={styles.top}>
       <div className={styles.profile}><span className={styles.avatar}>{name.slice(0, 1)}</span><div><strong>{name}</strong><span>{live ? <><i className={styles.liveDot} />{pick(connected ? 'مباشر الآن' : 'جارٍ إعادة الاتصال', connected ? 'LIVE NOW' : 'RECONNECTING')}<bdi>{elapsedLabel}</bdi></> : <><Star size={11} fill="currentColor" /> LiveStar Studio</>}</span></div></div>
       <div className={styles.topActions}><button className={styles.viewerPill} data-testid="studio-audience" onClick={() => setSheet('audience')} aria-label={pick('المشاهدون', 'Viewers')}><Users size={16} /><span data-testid="studio-viewers">{live ? stream?.viewerCount ?? '—' : 0}</span></button><button className={styles.round} data-testid="studio-close" onClick={exit} aria-label={pick('الخروج من الاستوديو', 'Exit studio')}>{live ? <Power size={23} /> : <X size={25} />}</button></div>
     </header>
     <div className={styles.statusBar}><span className={classes(styles.modePill, live && styles.modeLive)}><Radio size={13} />{pick(live ? 'على الهواء' : 'معاينة قبل البث', live ? 'ON AIR' : 'PREVIEW')}</span>{live && stream && <Link href={'/live/' + stream.id} data-testid="studio-sharelink" target="_blank" rel="noopener noreferrer"><ExternalLink size={13} />{pick('صفحة المشاهدة', 'Watch page')}</Link>}</div>
     {!previewReady && !busy && <div className={styles.empty}><div className={styles.cameraOrb}><Video size={38} strokeWidth={1.3} /></div><h1>{pick('هذه لحظتك', 'Make it your moment')}</h1><p>{pick('جهّز الكاميرا والميكروفون. لن يراك أحد حتى تبدأ البث.', 'Get your camera and microphone ready. You are only visible after going live.')}</p><button type="button" data-testid="studio-preview" className={styles.previewButton} onClick={() => { void preview(); }}><Camera size={18} />{pick('تشغيل الكاميرا والميكروفون', 'Enable camera and microphone')}</button></div>}
-    {previewReady && !cameraOn && <div className={styles.cameraMuted}><VideoOff size={35} /><span>{pick('الفيديو متوقف مؤقتًا', 'Camera video is paused')}</span></div>}
+    {previewReady && !cameraOn && <div className={classes(styles.cameraMuted, duel && styles.pkPaused, duel && (ownIsHost ? styles.pkHost : styles.pkGuest))}><VideoOff size={35} /><span>{pick('الفيديو متوقف مؤقتًا', 'Camera video is paused')}</span></div>}
     {busy && <div className={styles.connecting} role="status"><LoaderCircle size={25} className="spin" /><p>{phaseLabel}</p><small>{pick('يمكنك الإلغاء من زر الإغلاق في الأعلى.', 'You can cancel with the close button above.')}</small></div>}
     {error && !sheet && <div className={styles.error} role="alert">{error}<button aria-label={pick('إغلاق التنبيه', 'Dismiss alert')} onClick={() => setError('')}><X size={16} /></button></div>}
     {notice && <div className={styles.notice} role="status">{notice}</div>}
-    {live && stream && <GiftFeed streamId={stream.id} active={live} />}
+    {live && stream && <GiftFeed streamId={stream.id} active={live} showTotals={!duel} side={duel ? (ownIsHost ? 'host' : 'guest') : undefined} />}{opponent && <GiftFeed streamId={opponent.streamId} active={live} showTotals={false} side={ownIsHost ? 'guest' : 'host'} />}
     <div className={classes(styles.bottom, live && styles.bottomLive)}>
-      {live && stream && showChat && <StudioChat streamId={stream.id} />}
+      {live && stream && showChat && <StudioChat streamId={stream.id} actions={<><PkHostControls streamId={stream.id} isLive={live} battle={battle} serverNow={battleNow} onChange={refreshBattle} /><LiveLikeButton streamId={stream.id} isLive={live} compact /></>} />}
       {!live && <div className={styles.previewTools}>
         <Tool id="studio-flip" label={pick('قلب', 'Flip')} disabled={!previewReady || cameras.length < 2 || busy || switching} onClick={flip}><FlipHorizontal2 size={26} /></Tool>
         <Tool id="studio-camera" label={pick(cameraOn ? 'الكاميرا' : 'تشغيل الكاميرا', cameraOn ? 'Camera' : 'Enable camera')} active={!cameraOn} disabled={!previewReady || busy || switching} onClick={() => { void toggle('video'); }}>{cameraOn ? <Video size={26} /> : <VideoOff size={26} />}</Tool>

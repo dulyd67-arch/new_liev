@@ -32,6 +32,14 @@ enum StreamStatus {
   TERMINATED
 }
 
+enum PkBattleStatus {
+  INVITED
+  ACTIVE
+  FINISHED
+  DECLINED
+  CANCELED
+}
+
 enum LedgerUnit {
   LIVECOIN
   USD_MICRO
@@ -179,6 +187,10 @@ model User {
   moderationReceived   ModerationAction[]     @relation("ModerationTarget")
   auditLogs            AdminAuditLog[]
   revenuePolicies      RevenueSplit[]
+  hostedPkBattles      PkBattle[]             @relation("PkHostUser")
+  guestPkBattles       PkBattle[]             @relation("PkGuestUser")
+  invitedPkBattles     PkBattle[]             @relation("PkInviter")
+  streamLikes          StreamLike[]
 
   @@index([status, createdAt])
   @@map("users")
@@ -276,11 +288,68 @@ model LiveStream {
   reports        Report[]
   moderation     ModerationAction[]
   mutes          StreamMute[]
+  hostedPkBattles PkBattle[]         @relation("PkHostStream")
+  guestPkBattles  PkBattle[]         @relation("PkGuestStream")
+  wonPkBattles    PkBattle[]         @relation("PkWinnerStream")
+  likes           StreamLike[]
 
   @@index([status, createdAt])
   @@index([creatorId, createdAt])
   @@index([category, status])
   @@map("live_streams")
+}
+
+/// Two existing LIVE rooms. Scores snapshot committed free DU gifts only.
+/// All transitions use SQL RPCs; terminal records and participants are immutable.
+model PkBattle {
+  id                  String         @id @default(uuid()) @db.Uuid
+  hostStreamId        String         @map("host_stream_id") @db.Uuid
+  guestStreamId       String         @map("guest_stream_id") @db.Uuid
+  hostUserId          String         @map("host_user_id") @db.Uuid
+  guestUserId         String         @map("guest_user_id") @db.Uuid
+  inviterId           String         @map("inviter_id") @db.Uuid
+  idempotencyKey      String         @map("idempotency_key") @db.Uuid
+  status              PkBattleStatus @default(INVITED)
+  durationSeconds     Int            @default(300) @map("duration_seconds")
+  invitationExpiresAt DateTime       @map("invitation_expires_at") @db.Timestamptz(6)
+  startsAt            DateTime?      @map("starts_at") @db.Timestamptz(6)
+  endsAt              DateTime?      @map("ends_at") @db.Timestamptz(6)
+  finalHostScore      Decimal?       @map("final_host_score") @db.Decimal(78, 0)
+  finalGuestScore     Decimal?       @map("final_guest_score") @db.Decimal(78, 0)
+  winnerStreamId      String?        @map("winner_stream_id") @db.Uuid
+  finishReason        String?        @map("finish_reason") @db.VarChar(40)
+  settledAt           DateTime?      @map("settled_at") @db.Timestamptz(6)
+  createdAt           DateTime       @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(6)
+  hostStream          LiveStream     @relation("PkHostStream", fields: [hostStreamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  guestStream         LiveStream     @relation("PkGuestStream", fields: [guestStreamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  winnerStream        LiveStream?    @relation("PkWinnerStream", fields: [winnerStreamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  hostUser            User           @relation("PkHostUser", fields: [hostUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  guestUser           User           @relation("PkGuestUser", fields: [guestUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  inviter             User           @relation("PkInviter", fields: [inviterId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([inviterId, idempotencyKey])
+  @@index([hostStreamId, createdAt(sort: Desc)])
+  @@index([guestStreamId, createdAt(sort: Desc)])
+  @@index([guestUserId, status, createdAt(sort: Desc)])
+  @@index([status, endsAt])
+  @@map("pk_battles")
+}
+
+/// Authenticated server-clock batches, with idempotent replay and a global actor quota.
+model StreamLike {
+  id             String     @id @default(uuid()) @db.Uuid
+  streamId       String     @map("stream_id") @db.Uuid
+  userId         String     @map("user_id") @db.Uuid
+  count          Int
+  idempotencyKey String     @map("idempotency_key") @db.Uuid
+  createdAt      DateTime   @default(dbgenerated("clock_timestamp()")) @map("created_at") @db.Timestamptz(6)
+  stream         LiveStream @relation(fields: [streamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user           User       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, idempotencyKey])
+  @@index([streamId])
+  @@index([userId, createdAt])
+  @@map("stream_likes")
 }
 
 model StreamViewer {

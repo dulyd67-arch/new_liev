@@ -9,5 +9,6 @@ import { StreamsService } from './streams.service';
   imports: [CoreModule, AuthModule],
   controllers: [StreamsController],
   providers: [LiveKitService, StreamsService],
+  exports: [LiveKitService, StreamsService],
 })
 export class StreamsModule {}

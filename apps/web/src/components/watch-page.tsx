@@ -3,11 +3,14 @@
 import Link from 'next/link';
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Check, Copy, Flag, Globe2, LoaderCircle, Maximize, MessageCircle, MoreHorizontal, Radio, RefreshCw, Send, Share2, ShieldCheck, UserPlus, Users, VideoOff, Volume2, VolumeX, Wallet, X } from 'lucide-react';
-import { Room, RoomEvent, Track, type RemoteTrack } from 'livekit-client';
+import { Room, RoomEvent, Track, type RemoteTrack, type RemoteTrackPublication, type RemoteParticipant } from 'livekit-client';
 import { ApiError, useAuth, useErrorMessage } from '@/lib/auth';
 import { useLocale } from '@/lib/locale';
 import type { LiveStream, StreamMessage, StreamToken } from '@/lib/streams';
 import { GiftFeed, GiftPanel } from './gift-panel';
+import { OpponentFeed, type OpponentFeedHandle } from './opponent-feed';
+import { PkScoreboard, useBattle } from './pk-controls';
+import { LiveLikeButton } from './live-likes';
 import styles from './watch.module.css';
 
 type Sheet = 'share' | 'more' | 'report' | null;
@@ -53,6 +56,12 @@ export function WatchPage({ id }: { id: string }) {
   const errorMessageRef = useRef(errorMessage); errorMessageRef.current = errorMessage;
   const dialog = useRef<HTMLDialogElement>(null); const dialogTitle = useId(); const followLock = useRef(false); const reportLock = useRef(false);
   const live = stream?.status === 'LIVE'; const owner = !!user && user.id === stream?.creator.id;
+  const { battle, serverNow: battleNow } = useBattle(stream?.id ?? null, live);
+  const duel = live && battle?.status === 'ACTIVE';
+  const ownIsHost = battle?.host.streamId === id;
+  const opponent = duel && battle ? (ownIsHost ? battle.guest : battle.host) : null;
+  const opponentMedia = useRef<OpponentFeedHandle>(null);
+
   useEffect(() => {
     let cancelled = false; let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
@@ -66,10 +75,10 @@ export function WatchPage({ id }: { id: string }) {
     if (!live || loading) { void room.current?.disconnect(); setConnection('disconnected'); return; }
     let cancelled = false; let timedOut = false; const controller = new AbortController(); const current = new Room({ adaptiveStream: true }); room.current = current; setConnection('connecting');
     const audioContainer = audio.current; const videoElement = video.current;
-    const subscribed = (track: RemoteTrack) => {
-      if (cancelled || timedOut) return;
+    const subscribed = (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant) => {
+      if (cancelled || timedOut || participant.identity !== stream?.creator.id) return;
       if (track.kind === Track.Kind.Video && videoElement) { track.attach(videoElement); setHasVideo(true); }
-      else if (track.kind === Track.Kind.Audio && audioContainer) { const element = track.attach() as HTMLAudioElement; element.muted = mutedRef.current; element.setAttribute('data-stream-audio', 'true'); audioContainer.append(element); }
+      else if (track.kind === Track.Kind.Audio && audioContainer) { const element = track.attach() as HTMLAudioElement; element.muted = mutedRef.current; element.setAttribute('data-stream-audio', 'true'); element.setAttribute('data-stream-id', id); audioContainer.append(element); }
     };
     current.on(RoomEvent.TrackSubscribed, subscribed);
     current.on(RoomEvent.TrackUnsubscribed, track => { track.detach().forEach(element => { if (element.tagName === 'AUDIO') element.remove(); }); if (track.kind === Track.Kind.Video && !cancelled) setHasVideo(false); });
@@ -83,7 +92,7 @@ export function WatchPage({ id }: { id: string }) {
       catch { clearTimeout(timeout); if (!cancelled) setConnection('failed'); }
     })();
     return () => { cancelled = true; controller.abort(); clearTimeout(timeout); void current.disconnect(); audioContainer?.replaceChildren(); setHasVideo(false); if (room.current === current) room.current = null; };
-  }, [id, live, loading, request, retry]);
+  }, [id, live, loading, request, retry, stream?.creator.id]);
   useEffect(() => { if (sheet) { if (!dialog.current?.open) dialog.current?.showModal(); } else dialog.current?.close(); }, [sheet]);
   useEffect(() => {
     if (!user || !stream || user.id === stream.creator.id) { setFollowing(false); return; }
@@ -104,7 +113,7 @@ export function WatchPage({ id }: { id: string }) {
   }
   async function copy() { try { await navigator.clipboard.writeText(shareUrl); setCopied(true); } catch { setNotice(pick('يمكنك تحديد الرابط ونسخه يدويًا.', 'Select the link and copy it manually.')); } }
   async function toggleAudio() {
-    if (audioBlocked) { try { await room.current?.startAudio(); setAudioBlocked(false); } catch { setNotice(pick('لم يسمح المتصفح بتشغيل الصوت بعد. حاول مجددًا.', 'Your browser has not allowed audio yet. Try again.')); return; } }
+    if (audioBlocked) { try { await Promise.all([room.current?.startAudio(), opponentMedia.current?.startAudio()]); setAudioBlocked(false); } catch { setNotice(pick('لم يسمح المتصفح بتشغيل الصوت بعد. حاول مجددًا.', 'Your browser has not allowed audio yet. Try again.')); return; } }
     const next = !muted; mutedRef.current = next; setMuted(next); audio.current?.querySelectorAll('audio').forEach(element => { element.muted = next; });
   }
   async function fullscreen() {
@@ -120,21 +129,25 @@ export function WatchPage({ id }: { id: string }) {
   }
   const mediaFailed = ['failed', 'disconnected'].includes(connection);
   return <section ref={stage} className={styles.page} data-testid="watch-stage" aria-label={pick('مشاهدة البث المباشر', 'Watch live stream')}>
-    <video ref={video} muted autoPlay playsInline className={styles.video} data-testid="watch-video" aria-label={pick('فيديو البث المباشر', 'Live stream video')} /><div ref={audio} hidden /><div className={styles.shade} aria-hidden="true" />
+    <video ref={video} muted autoPlay playsInline className={`${styles.video} ${duel ? styles.pkOwnVideo : ''} ${duel ? (ownIsHost ? styles.pkHost : styles.pkGuest) : ''}`} data-testid="watch-video" data-stream-id={id} aria-label={pick('فيديو البث المباشر', 'Live stream video')} /><div ref={audio} hidden />
+    {opponent && <OpponentFeed ref={opponentMedia} streamId={opponent.streamId} creatorId={opponent.userId} displayName={opponent.displayName} side={ownIsHost ? 'guest' : 'host'} testId="watch-opponent-video" muted={muted} />}
+    {duel && battle && <><strong className={`${styles.pkOwnName} ${ownIsHost ? styles.pkHost : styles.pkGuest}`}>{stream?.creator.displayName}</strong><div className={styles.pkGiftHost} data-testid="pk-host-gifts"><GiftPanel streamId={battle.host.streamId} isLive={live} isCreator={user?.id === battle.host.userId} recipientName={battle.host.displayName} compact /></div><div className={styles.pkGiftGuest} data-testid="pk-guest-gifts"><GiftPanel streamId={battle.guest.streamId} isLive={live} isCreator={user?.id === battle.guest.userId} recipientName={battle.guest.displayName} compact /></div></>}
+    <div className={styles.shade} aria-hidden="true" />
+    {live && <PkScoreboard battle={battle} serverNow={battleNow} streamId={id} />}
     <header className={styles.header}>
       {stream ? <div className={styles.creatorPill}><Link href={`/u/${stream.creator.username}`} className={styles.creatorLink}><span className={styles.avatar}>{stream.creator.displayName.slice(0, 1)}</span><span><strong>{stream.creator.displayName}</strong><small><span className={live ? styles.liveDot : styles.endedDot} />{pick(live ? 'مباشر' : 'انتهى البث', live ? 'LIVE' : 'ENDED')}</small></span></Link>{!owner && (user ? <button className={following ? styles.following : styles.follow} type="button" onClick={() => { void follow(); }} disabled={followBusy} data-testid="watch-follow" aria-pressed={following}>{followBusy ? <LoaderCircle size={14} className="spin" /> : following ? <Check size={14} /> : <UserPlus size={14} />}<span>{pick(following ? 'تتابعه' : 'متابعة', following ? 'Following' : 'Follow')}</span></button> : <Link className={styles.follow} href={`/login?returnTo=${encodeURIComponent(`/live/${id}`)}`}><UserPlus size={14} />{pick('متابعة', 'Follow')}</Link>)}</div> : <Link href="/" className={styles.wordmark}>Live<span>Star</span></Link>}
       <div className={styles.topActions}>{stream && <span className={styles.viewerCount} title={pick('المشاهدون الآن', 'Current viewers')}><Users size={15} /><span data-testid="watch-viewers">{stream.viewerCount ?? '…'}</span></span>}<button type="button" className={styles.round} onClick={() => setLocale(locale === 'ar' ? 'en' : 'ar')} aria-label={pick('Switch to English', 'التبديل إلى العربية')}><Globe2 size={19} /></button><Link href="/" className={styles.round} aria-label={pick('مغادرة البث', 'Leave stream')} data-testid="watch-close"><X size={25} /></Link></div>
     </header>
     {stream && <div className={styles.titleRow}><h1>{stream.title}</h1>{live && <span className={styles.onAir}><Radio size={12} />LIVE</span>}</div>}
-    {(loading || !stream || !live || !hasVideo) && <div className={styles.placeholder} role="status">
+    {(loading || !stream || !live || !hasVideo) && <div className={`${styles.placeholder} ${duel ? styles.pkPaused : ''} ${duel ? (ownIsHost ? styles.pkHost : styles.pkGuest) : ''}`} role="status">
       {loading ? <LoaderCircle size={35} className="spin" /> : !stream || !live ? <VideoOff size={40} strokeWidth={1.3} /> : <Radio size={40} strokeWidth={1.3} />}
       <h2>{pick(loading ? 'نجهّز لك اللحظة…' : !stream ? 'البث غير متاح' : !live ? 'انتهت هذه اللحظة' : mediaFailed ? 'انقطع الاتصال بالبث' : connection === 'connected' ? 'بانتظار صورة المذيع' : 'جارٍ الاتصال بالبث…', loading ? 'One moment…' : !stream ? 'Stream unavailable' : !live ? 'This moment has ended' : mediaFailed ? 'Stream connection interrupted' : connection === 'connected' ? 'Waiting for the broadcaster’s video' : 'Connecting to the stream…')}</h2>
       <p>{pick(!stream && !loading ? error || 'ربما تغيّر الرابط أو لم يعد البث متاحًا.' : !live && !loading ? 'شكرًا لمشاركتك. اكتشف من يبث الآن.' : 'الصوت والتعليقات والهدايا تجتمع هنا.', !stream && !loading ? error || 'The link may have changed or this stream is no longer available.' : !live && !loading ? 'Thanks for joining. Discover who is live now.' : 'A place for voices, conversation and gifts.')}</p>
       {stream && live && mediaFailed ? <button className={styles.retry} type="button" onClick={() => setRetry(value => value + 1)} data-testid="watch-retry"><RefreshCw size={16} />{pick('إعادة الاتصال', 'Reconnect')}</button> : !loading && (!stream || !live) ? <Link href="/" className={styles.retry}>{pick('اكتشف بثوثًا أخرى', 'Explore live streams')}</Link> : null}
     </div>}
-    {stream && <GiftFeed streamId={id} active={live} />}
+    {stream && <GiftFeed streamId={id} active={live} showTotals={!duel} side={duel ? (ownIsHost ? 'host' : 'guest') : undefined} />}{opponent && <GiftFeed streamId={opponent.streamId} active={live} showTotals={false} side={ownIsHost ? 'guest' : 'host'} />}
     {audioBlocked && live && <button className={styles.audioPrompt} type="button" onClick={() => { void toggleAudio(); }}><Volume2 size={18} />{pick('اضغط لتشغيل الصوت', 'Tap to enable sound')}</button>}
-    {stream && <div className={styles.bottom}><WatchChat streamId={id} live={live} actions={<><button className={styles.round} type="button" onClick={() => { void share(); }} aria-label={pick('مشاركة البث', 'Share stream')} data-testid="watch-share"><Share2 size={23} /></button><GiftPanel streamId={id} isLive={live} isCreator={owner} compact /><button type="button" className={styles.round} onClick={() => setSheet('more')} aria-label={pick('المزيد من الأدوات', 'More options')} data-testid="watch-more"><MoreHorizontal size={24} /></button></>} />{owner && live && <Link href="/go-live" className={styles.ownerLink}>{pick('العودة إلى أدوات إدارة بثك', 'Return to your studio')}</Link>}</div>}
+    {stream && <div className={styles.bottom}><WatchChat streamId={id} live={live} actions={<><button className={styles.round} type="button" onClick={() => { void share(); }} aria-label={pick('مشاركة البث', 'Share stream')} data-testid="watch-share"><Share2 size={23} /></button><GiftPanel streamId={id} isLive={live} isCreator={owner} recipientName={stream.creator.displayName} compact /><LiveLikeButton streamId={id} isLive={live} compact /><button type="button" className={styles.round} onClick={() => setSheet('more')} aria-label={pick('المزيد من الأدوات', 'More options')} data-testid="watch-more"><MoreHorizontal size={24} /></button></>} />{owner && live && <Link href="/go-live" className={styles.ownerLink}>{pick('العودة إلى أدوات إدارة بثك', 'Return to your studio')}</Link>}</div>}
     {notice && <div role="status" className={styles.notice}>{notice}<button type="button" onClick={() => setNotice('')} aria-label={pick('إغلاق التنبيه', 'Dismiss notice')}><X size={15} /></button></div>}
     {error && stream && !sheet && <div role="alert" className={styles.error}>{error}<button type="button" onClick={() => setError('')} aria-label={pick('إغلاق التنبيه', 'Dismiss alert')}><X size={15} /></button></div>}
     <dialog ref={dialog} className={styles.dialog} aria-labelledby={dialogTitle} onCancel={() => setSheet(null)} onClose={() => setSheet(null)}>

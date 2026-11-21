@@ -16,10 +16,11 @@ interface GiftPanelProps {
   isCreator?: boolean;
   triggerClassName?: string;
   compact?: boolean;
+  recipientName?: string;
 }
 
 /** Independent gift button and modal: mount beside the LIVE chat controls. */
-export function GiftPanel({ streamId, isLive, isCreator = false, triggerClassName, compact = false }: GiftPanelProps) {
+export function GiftPanel({ streamId, isLive, isCreator = false, triggerClassName, compact = false, recipientName }: GiftPanelProps) {
   const { request, user } = useAuth(); const { pick, locale } = useLocale();
   const userId = user?.id;
   const [open, setOpen] = useState(false);
@@ -131,6 +132,7 @@ export function GiftPanel({ streamId, isLive, isCreator = false, triggerClassNam
 
   const modal = open ? <div className={styles.scrim} onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><div ref={dialog} className={styles.panel} data-testid="gift-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={noteId}>
     <div className={styles.handle} /><header className={styles.heading}><div><p><Sparkles size={12} />{pick('دعمك يصنع اللحظة', 'A LITTLE LOVE GOES A LONG WAY')}</p><h2 id={titleId}>{pick('أرسل هدية', 'Send a gift')}<Gift size={22} /></h2></div><button type="button" className={styles.close} onClick={close} aria-label={pick('إغلاق الهدايا', 'Close gifts')}><X size={22} /></button></header>
+    {recipientName && <p className={styles.recipient}>{pick('إلى: ', 'To: ')}<strong>{recipientName}</strong></p>}
     <p className={styles.subtitle} id={noteId}>{pick('اختر هدية تضيء بثّهم. كل الهدايا بعملات DU المجانية.', 'Brighten their LIVE. Gifts use free promotional DU coins.')}</p>
     {!isLive && <p className={styles.error} role="status">{pick('انتهى هذا البث. الهدايا متاحة أثناء اللايف فقط.', 'This LIVE has ended. Gifts are available during a live stream only.')}</p>}
     {isCreator && <p className={styles.selfNotice}>{pick('هذه هدايا جمهورك. يمكنك استقبالها أثناء بثك وإرسالها في بثوث الآخرين.', 'These are gifts from your audience. Receive them in your LIVE and send them in other streams.')}</p>}
@@ -144,7 +146,7 @@ export function GiftPanel({ streamId, isLive, isCreator = false, triggerClassNam
 }
 
 /** Initial response establishes a cursor. Only new, committed server events animate. */
-export function GiftFeed({ streamId, active = true }: { streamId: string; active?: boolean }) {
+export function GiftFeed({ streamId, active = true, showTotals = true, side }: { streamId: string; active?: boolean; showTotals?: boolean; side?: 'host' | 'guest' }) {
   const { request } = useAuth(); const { pick, locale } = useLocale();
   const [current, setCurrent] = useState<DuGiftEvent | null>(null);
   const [totals, setTotals] = useState<{ coins: string; gifts: string } | null>(null);
@@ -188,5 +190,5 @@ export function GiftFeed({ streamId, active = true }: { streamId: string; active
   }, [active, request, streamId]);
 
   if (!active) return null;
-  return <div className={styles.feed} data-testid="gift-feed"><div className={styles.giftTotals} data-testid="gift-totals"><Gift size={13} /><span>{totals ? formatDu(totals.coins, locale) : '—'} DU</span>{disconnected && <span className={styles.feedDelayed} title={pick('تحديث الهدايا متأخر مؤقتًا', 'Gift updates are temporarily delayed')}>…</span>}</div><div className={styles.animationArea} role="status" aria-live="polite" aria-atomic="true">{current && <div className={styles.giftAnimation} key={current.id} data-testid="gift-overlay" data-effect={current.gift.effect}><span className={styles.floatingSpark} aria-hidden="true">✦</span><span className={styles.eventEmoji} aria-hidden="true">{current.gift.emoji}</span><div><strong>{current.sender.displayName}</strong><p>{pick('أرسل', 'sent')} {pick(current.gift.nameAr, current.gift.nameEn)}</p></div><b>×{formatDu(String(current.quantity), locale)}</b><span className={styles.floatingSparkTwo} aria-hidden="true">✧</span></div>}</div></div>;
+  return <div className={`${styles.feed} ${side === 'host' ? styles.duelHost : side === 'guest' ? styles.duelGuest : ''}`} data-testid="gift-feed">{showTotals && <div className={styles.giftTotals} data-testid="gift-totals"><Gift size={13} /><span>{totals ? formatDu(totals.coins, locale) : '—'} DU</span>{disconnected && <span className={styles.feedDelayed} title={pick('تحديث الهدايا متأخر مؤقتًا', 'Gift updates are temporarily delayed')}>…</span>}</div>}<div className={styles.animationArea} role="status" aria-live="polite" aria-atomic="true">{current && <div className={styles.giftAnimation} key={current.id} data-testid="gift-overlay" data-effect={current.gift.effect}><span className={styles.floatingSpark} aria-hidden="true">✦</span><span className={styles.eventEmoji} aria-hidden="true">{current.gift.emoji}</span><div><strong>{current.sender.displayName}</strong><p>{pick('أرسل', 'sent')} {pick(current.gift.nameAr, current.gift.nameEn)}</p></div><b>×{formatDu(String(current.quantity), locale)}</b><span className={styles.floatingSparkTwo} aria-hidden="true">✧</span></div>}</div></div>;
 }

@@ -44,6 +44,10 @@ jobs:
       SMTP_HOST: localhost
       SMTP_PORT: "1025"
       SMTP_FROM: noreply@livestar.local
+      LIVEKIT_URL: ws://127.0.0.1:7880
+      LIVEKIT_API_URL: http://127.0.0.1:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -68,7 +72,16 @@ jobs:
       - run: npm test
       - run: npm run test:free
       - run: npm run db:test
-      - name: Start local API for DU integration
+      - name: Start isolated local media provider
+        run: |
+          docker run --detach --name livestar-ci-livekit --publish 127.0.0.1:7880:7880 livekit/livekit-server:v1.13.11 --dev --bind 0.0.0.0
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:7880/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker logs livestar-ci-livekit
+          exit 1
+      - name: Start local API for live feature integration
         run: |
           PORT=4001 npm run start:api > /tmp/livestar-ci-api.log 2>&1 &
           for attempt in {1..30}; do
@@ -78,6 +91,18 @@ jobs:
           cat /tmp/livestar-ci-api.log
           exit 1
       - run: npm run test:du:integration
+      - name: Verify PK with independent API rate limits
+        run: |
+          PORT=4003 node apps/api/dist/main.js > /tmp/livestar-ci-pk-api.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4003/api/v1/health/ready >/dev/null; then
+              PK_TEST_API_URL=http://127.0.0.1:4003/api/v1 npm run test:pk:integration
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/livestar-ci-pk-api.log
+          exit 1
       - run: npm run test:auth:integration
       - run: npm run db:check-static
       - name: Validate development compose

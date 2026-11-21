@@ -47,6 +47,7 @@ export class StreamsService {
     if (!['LIVE', 'SCHEDULED'].includes(stream.status)) return;
     try {
       await this.livekit.deleteRoom(stream.livekitRoom);
+      await this.settleBattle(stream.id);
       await this.database.liveStream.update({ where: { id: stream.id }, data: { status: 'ENDED', endedAt: new Date() } });
     } catch { /* Refuse new viewers and retry stopping on the next lookup. */ }
   }
@@ -75,6 +76,7 @@ export class StreamsService {
       const rooms = await this.livekit.rooms([stream.livekitRoom]);
       if (!rooms.has(stream.livekitRoom)) {
         if (stream.status === 'SCHEDULED' && Date.now() - stream.createdAt.getTime() < 180_000) return result;
+        await this.settleBattle(stream.id);
         const ended = await this.database.liveStream.update({
           where: { id: stream.id }, data: { status: 'ENDED', endedAt: new Date() }, include: streamInclude,
         });
@@ -202,11 +204,18 @@ export class StreamsService {
     return this.view(updated);
   }
 
+  private async settleBattle(streamId: string): Promise<void> {
+    // Run independently of user/stream row transactions, matching PK's lock
+    // order. The media room has already stopped before an end is committed.
+    await this.database.$queryRaw`SELECT public.pk_settle_stream(${streamId}::uuid)::text`;
+  }
+
   async end(id: string, userId: string): Promise<StreamView> {
     const stream = await this.record(id); this.assertOwner(stream, userId);
-    if (['ENDED', 'TERMINATED'].includes(stream.status)) return this.baseView(stream);
+    if (['ENDED', 'TERMINATED'].includes(stream.status)) { await this.settleBattle(id); return this.baseView(stream); }
     try { await this.livekit.deleteRoom(stream.livekitRoom); }
     catch { throw new BadGatewayException('The media server could not stop this stream. Try again.'); }
+    await this.settleBattle(id);
     const ended = await this.database.liveStream.update({ where: { id }, data: { status: 'ENDED', endedAt: new Date() }, include: streamInclude });
     return this.baseView(ended);
   }

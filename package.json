@@ -2,7 +2,7 @@
   "name": "livestar",
   "version": "0.1.0",
   "private": true,
-  "description": "LiveStar — live video, chat and promotional DU gifts",
+  "description": "LiveStar — live video, PK battles, hearts and DU gifts",
   "workspaces": [
     "apps/api",
     "apps/web",
@@ -38,7 +38,9 @@
     "test:studio:browser": "node scripts/studio.browser.test.mjs",
     "test:free": "node --test scripts/start-free.test.mjs",
     "test:du:integration": "node --test scripts/du.integration.test.mjs",
-    "test:du:browser": "node --test scripts/du.browser.test.mjs"
+    "test:du:browser": "node --test scripts/du.browser.test.mjs",
+    "test:pk:integration": "node --test scripts/pk.integration.test.mjs",
+    "test:pk:browser": "node --test scripts/pk.browser.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",
