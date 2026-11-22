@@ -1,6 +1,7 @@
 import { Transform } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateBy, ValidateIf } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateBy, ValidateIf } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MAX_AVATAR_DATA_URL_LENGTH, parseProfileAvatar } from './avatar';
 
 const trim = ({ value }: { value: unknown }): unknown => typeof value === 'string' ? value.trim() : value;
 
@@ -24,6 +25,25 @@ export class UpdateProfileDto {
     try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; }
   }, defaultMessage: () => 'timezone must be a supported IANA time zone' } })
   timezone?: string;
+
+  @ApiPropertyOptional({ type: String, nullable: true, maxLength: MAX_AVATAR_DATA_URL_LENGTH, description: 'A small JPEG, PNG or WebP data URL. Null removes the photo.' })
+  @IsOptional() @IsString() @MaxLength(MAX_AVATAR_DATA_URL_LENGTH)
+  @ValidateBy({ name: 'profileAvatar', validator: { validate(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    try { parseProfileAvatar(value); return true; } catch { return false; }
+  }, defaultMessage: () => 'avatarDataUrl must contain a JPEG, PNG or WebP up to 48 KiB and 512 × 512 pixels' } })
+  avatarDataUrl?: string | null;
+}
+
+export class ProfilePageQueryDto {
+  @ApiPropertyOptional({ type: String, format: 'uuid', description: 'Last returned ID for stable ascending pagination.' })
+  @IsOptional() @IsUUID()
+  cursor?: string;
+
+  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 20, default: 20 })
+  @IsOptional() @Transform(({ value }: { value: unknown }) => typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value)
+  @IsInt() @Min(1) @Max(20)
+  limit?: number;
 }
 
 export class SearchUsersDto {

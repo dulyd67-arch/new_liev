@@ -91,6 +91,7 @@ export class StreamsService {
     const records = await this.database.liveStream.findMany({
       where: {
         status: 'LIVE',
+        ...(query.creatorId ? { creatorId: query.creatorId } : {}),
         ...(query.category ? { category: query.category } : {}),
         ...(query.query?.trim() ? { OR: [
           { title: { contains: query.query.trim(), mode: 'insensitive' as const } },

@@ -15,6 +15,7 @@
 .footer :global(.brand){font-size:19px}
 .footer :global(.brand-icon){width:29px;height:31px}
 .mobileNavigation{display:none}
+.accountAvatar{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}
 @media(max-width:1050px){.shell .header{padding-inline:24px;gap:15px}.shell .header :global(.main-navigation){margin-inline-start:5px}.header :global(.nav-link){padding-inline:11px}.header :global(.account-name){display:none}}
 @media(max-width:760px){
   .shell .header{height:68px;padding:0 18px;gap:12px;justify-content:space-between}

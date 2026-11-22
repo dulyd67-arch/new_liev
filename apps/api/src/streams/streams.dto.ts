@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
 
 export const STREAM_CATEGORIES = ['chat', 'music', 'gaming', 'talent'] as const;
 
@@ -14,6 +14,8 @@ export class CreateStreamDto {
 export class StreamQueryDto {
   @ApiPropertyOptional({ type: String, maxLength: 80 }) @IsOptional() @IsString() @MaxLength(80) query?: string;
   @ApiPropertyOptional({ type: String, enum: STREAM_CATEGORIES }) @IsOptional() @IsIn(STREAM_CATEGORIES) category?: typeof STREAM_CATEGORIES[number];
+  @ApiPropertyOptional({ type: String, format: 'uuid', description: 'Limit live discovery to one creator.' })
+  @IsOptional() @IsUUID() creatorId?: string;
 }
 
 export class MessageDto {

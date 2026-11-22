@@ -1,2 +1,2 @@
-import { PublicProfilePage } from '@/components/account-pages';
+import { PublicProfilePage } from '@/components/profile-page';
 export default async function Page({ params }: { params: Promise<{ username: string }> }) { const { username } = await params; return <PublicProfilePage username={username} />; }

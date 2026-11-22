@@ -5,6 +5,9 @@ import { DatabaseService } from '../src/database.service';
 import { LiveKitService } from '../src/streams/livekit.service';
 import { StreamsService } from '../src/streams/streams.service';
 import { EnvironmentValidationError } from '../src/config';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { StreamQueryDto } from '../src/streams/streams.dto';
 
 const ownerId = '10000000-0000-4000-8000-000000000001';
 const streamId = '20000000-0000-4000-8000-000000000002';
@@ -120,6 +123,30 @@ describe('production media configuration', () => {
 });
 
 describe('livestream authorization and genuine media state', () => {
+  it('filters the creator in the database before the discovery limit and preserves other filters', async () => {
+    const { service, db } = fixture();
+    const result = await service.list({ creatorId: ownerId, category: 'chat', query: '  broadcaster  ' });
+    expect(db.liveStream.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        status: 'LIVE', creatorId: ownerId, category: 'chat',
+        OR: [
+          { title: { contains: 'broadcaster', mode: 'insensitive' } },
+          { creator: { profile: { displayName: { contains: 'broadcaster', mode: 'insensitive' } } } },
+          { creator: { profile: { username: { contains: 'broadcaster', mode: 'insensitive' } } } },
+        ],
+      },
+      take: 24,
+    }));
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.creator.id).toBe(ownerId);
+  });
+
+  it('does not advertise an unpublished creator just because their stream was requested explicitly', async () => {
+    const { service, media } = fixture();
+    media.presence.mockResolvedValue({ viewerCount: 3, publisherConnected: false, publisherHasTracks: false });
+    expect((await service.list({ creatorId: ownerId })).items).toEqual([]);
+  });
+
   it('rejects another account obtaining a host token or ending a room', async () => {
     const { service, media, db } = fixture();
     await expect(service.hostToken(streamId, otherId)).rejects.toBeInstanceOf(ForbiddenException);
@@ -201,5 +228,15 @@ describe('livestream authorization and genuine media state', () => {
     expect(db.liveStream.create).not.toHaveBeenCalled();
     await expect(service.create(ownerId, { title: 'Second room' })).rejects.toBeInstanceOf(ConflictException);
     expect(media.createRoom).not.toHaveBeenCalled();
+  });
+});
+
+describe('creator discovery query validation', () => {
+  it('accepts an optional creator UUID and rejects invalid values before database lookup', async () => {
+    expect(await validate(plainToInstance(StreamQueryDto, {}))).toHaveLength(0);
+    expect(await validate(plainToInstance(StreamQueryDto, { creatorId: ownerId }))).toHaveLength(0);
+    for (const creatorId of ['host', '', '  ', '10000000-0000-4000-8000-000000000001 OR 1=1', 1, ['host']]) {
+      expect((await validate(plainToInstance(StreamQueryDto, { creatorId }))).length).toBeGreaterThan(0);
+    }
   });
 });

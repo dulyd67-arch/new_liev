@@ -103,6 +103,18 @@ jobs:
           done
           cat /tmp/livestar-ci-pk-api.log
           exit 1
+      - name: Verify profiles with independent API rate limits
+        run: |
+          PORT=4005 node apps/api/dist/main.js > /tmp/livestar-ci-profile-api.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4005/api/v1/health/ready >/dev/null; then
+              PROFILE_TEST_API_URL=http://127.0.0.1:4005/api/v1 npm run test:profile:integration
+              exit $?
+            fi
+            sleep 1
+          done
+          cat /tmp/livestar-ci-profile-api.log
+          exit 1
       - run: npm run test:auth:integration
       - run: npm run db:check-static
       - name: Validate development compose
