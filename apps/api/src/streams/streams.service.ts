@@ -48,12 +48,36 @@ export class StreamsService {
     try {
       await this.livekit.deleteRoom(stream.livekitRoom);
       await this.settleBattle(stream.id);
-      await this.database.liveStream.update({ where: { id: stream.id }, data: { status: 'ENDED', endedAt: new Date() } });
+      await this.markEnded(stream.id);
     } catch { /* Refuse new viewers and retry stopping on the next lookup. */ }
   }
 
   private assertOwner(stream: StreamRecord, userId: string): void {
     if (stream.creatorId !== userId) throw new ForbiddenException('Only the broadcaster can manage this stream.');
+  }
+
+  private async markEnded(id: string): Promise<StreamRecord> {
+    // A media response may have been in flight while an administrator made the
+    // stream terminal. Never downgrade that moderation decision to ENDED.
+    await this.database.liveStream.updateMany({
+      where: { id, status: { in: ['SCHEDULED', 'LIVE'] } },
+      data: { status: 'ENDED', endedAt: new Date() },
+    });
+    return this.database.liveStream.findUniqueOrThrow({ where: { id }, include: streamInclude });
+  }
+
+  private async publishable(id: string, userId: string): Promise<StreamRecord> {
+    // No provider call holds these locks. Recheck after signing so an account
+    // suspended during media I/O cannot be handed fresh publishing credentials.
+    return this.database.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM public.users WHERE id = ${userId}::uuid FOR UPDATE`;
+      const user = await tx.user.findFirst({ where: { id: userId, status: 'ACTIVE', deletedAt: null }, select: { id: true } });
+      if (!user) throw new ForbiddenException('Account is unavailable.');
+      const stream = await tx.liveStream.findUniqueOrThrow({ where: { id }, include: streamInclude });
+      this.assertOwner(stream, userId);
+      if (!['SCHEDULED', 'LIVE'].includes(stream.status)) throw new ConflictException('This stream has ended.');
+      return stream;
+    });
   }
 
   private baseView(stream: StreamRecord): StreamView {
@@ -75,15 +99,21 @@ export class StreamsService {
     try {
       const rooms = await this.livekit.rooms([stream.livekitRoom]);
       if (!rooms.has(stream.livekitRoom)) {
-        if (stream.status === 'SCHEDULED' && Date.now() - stream.createdAt.getTime() < 180_000) return result;
+        if (stream.status === 'SCHEDULED' && Date.now() - stream.createdAt.getTime() < 180_000) {
+          return this.baseView(await this.database.liveStream.findUniqueOrThrow({ where: { id: stream.id }, include: streamInclude }));
+        }
         await this.settleBattle(stream.id);
-        const ended = await this.database.liveStream.update({
-          where: { id: stream.id }, data: { status: 'ENDED', endedAt: new Date() }, include: streamInclude,
-        });
+        const ended = await this.markEnded(stream.id);
         return this.baseView(ended);
       }
       const presence = await this.livekit.presence(stream.livekitRoom, stream.creatorId);
-      return { ...result, viewerCount: presence.viewerCount, mediaAvailable: true, publisherConnected: presence.publisherHasTracks };
+      const current = await this.database.liveStream.findUniqueOrThrow({ where: { id: stream.id }, include: streamInclude });
+      if (!['LIVE', 'SCHEDULED'].includes(current.status)) return this.baseView(current);
+      if (current.creator.status !== 'ACTIVE') {
+        await this.stopInactiveCreator(current);
+        return this.baseView(await this.database.liveStream.findUniqueOrThrow({ where: { id: stream.id }, include: streamInclude }));
+      }
+      return { ...this.baseView(current), viewerCount: presence.viewerCount, mediaAvailable: true, publisherConnected: presence.publisherHasTracks };
     } catch { return result; }
   }
 
@@ -131,7 +161,7 @@ export class StreamsService {
       stream = await this.database.$transaction(async tx => {
         // The same user-first lock order as authentication/deletion.
         await tx.$queryRaw`SELECT id FROM public.users WHERE id = ${userId}::uuid FOR UPDATE`;
-        const user = await tx.user.findFirst({ where: { id: userId, status: 'ACTIVE' }, select: { id: true } });
+        const user = await tx.user.findFirst({ where: { id: userId, status: 'ACTIVE', deletedAt: null }, select: { id: true } });
         if (!user) throw new ForbiddenException('Account is unavailable.');
         if (await tx.liveStream.findFirst({ where: { creatorId: userId, status: { in: ['SCHEDULED', 'LIVE'] } }, select: { id: true } })) {
           throw new ConflictException('Finish your current stream before starting another.');
@@ -148,10 +178,12 @@ export class StreamsService {
     try {
       await this.livekit.createRoom(stream.livekitRoom);
       const connection = await this.livekit.token(stream.livekitRoom, userId, stream.creator.profile?.displayName ?? 'Broadcaster', true);
-      return { stream: { ...this.baseView(stream), viewerCount: 0, mediaAvailable: true }, ...connection };
-    } catch {
+      const current = await this.publishable(stream.id, userId);
+      return { stream: { ...this.baseView(current), viewerCount: 0, mediaAvailable: true }, ...connection };
+    } catch (error) {
       try { await this.livekit.deleteRoom(stream.livekitRoom); } catch { /* Empty rooms expire automatically. */ }
-      await this.database.liveStream.update({ where: { id: stream.id }, data: { status: 'ENDED', endedAt: new Date() } });
+      await this.markEnded(stream.id);
+      if (error instanceof ForbiddenException || error instanceof ConflictException || error instanceof NotFoundException) throw error;
       throw new ServiceUnavailableException('The media server could not start this stream.');
     }
   }
@@ -163,9 +195,11 @@ export class StreamsService {
     try {
       const rooms = await this.livekit.rooms([stream.livekitRoom]);
       if (!rooms.has(stream.livekitRoom)) throw new ConflictException('This stream has ended.');
-      return await this.livekit.token(stream.livekitRoom, userId, stream.creator.profile?.displayName ?? 'Broadcaster', true);
+      const connection = await this.livekit.token(stream.livekitRoom, userId, stream.creator.profile?.displayName ?? 'Broadcaster', true);
+      await this.publishable(id, userId);
+      return connection;
     } catch (error) {
-      if (error instanceof ConflictException) throw error;
+      if (error instanceof ForbiddenException || error instanceof ConflictException) throw error;
       throw new ServiceUnavailableException('The media server is unavailable.');
     }
   }
@@ -177,9 +211,12 @@ export class StreamsService {
     try {
       const rooms = await this.livekit.rooms([stream.livekitRoom]);
       if (!rooms.has(stream.livekitRoom)) throw new ConflictException('This stream has ended.');
-      return await this.livekit.token(stream.livekitRoom, `viewer-${randomUUID()}`, 'Viewer', false);
+      const connection = await this.livekit.token(stream.livekitRoom, `viewer-${randomUUID()}`, 'Viewer', false);
+      const current = await this.record(id);
+      if (current.status !== 'LIVE') throw new ConflictException('This stream is not live.');
+      return connection;
     } catch (error) {
-      if (error instanceof ConflictException) throw error;
+      if (error instanceof ConflictException || error instanceof NotFoundException) throw error;
       throw new ServiceUnavailableException('The media server is unavailable.');
     }
   }
@@ -217,7 +254,7 @@ export class StreamsService {
     try { await this.livekit.deleteRoom(stream.livekitRoom); }
     catch { throw new BadGatewayException('The media server could not stop this stream. Try again.'); }
     await this.settleBattle(id);
-    const ended = await this.database.liveStream.update({ where: { id }, data: { status: 'ENDED', endedAt: new Date() }, include: streamInclude });
+    const ended = await this.markEnded(id);
     return this.baseView(ended);
   }
 

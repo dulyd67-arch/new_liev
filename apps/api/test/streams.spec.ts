@@ -12,20 +12,26 @@ import { StreamQueryDto } from '../src/streams/streams.dto';
 const ownerId = '10000000-0000-4000-8000-000000000001';
 const streamId = '20000000-0000-4000-8000-000000000002';
 const otherId = '30000000-0000-4000-8000-000000000003';
-function record(status: 'LIVE' | 'SCHEDULED' | 'ENDED' = 'LIVE') {
+function record(status: 'LIVE' | 'SCHEDULED' | 'ENDED' | 'TERMINATED' = 'LIVE') {
   return {
     id: streamId, creatorId: ownerId, title: 'A real broadcast', category: 'chat', description: null, language: 'ar',
     status, livekitRoom: 'livestar-test-room', thumbnailKey: null, createdAt: new Date(),
-    startedAt: status === 'SCHEDULED' ? null : new Date(), endedAt: status === 'ENDED' ? new Date() : null,
+    startedAt: status === 'SCHEDULED' ? null : new Date(), endedAt: ['ENDED', 'TERMINATED'].includes(status) ? new Date() : null,
     creator: { id: ownerId, status: 'ACTIVE', profile: { username: 'host', displayName: 'Broadcaster' } },
   };
 }
 function fixture(current = record()) {
+  const state = { current };
   const db = {
     liveStream: {
-      findFirst: vi.fn().mockResolvedValue(current), findMany: vi.fn().mockResolvedValue([current]),
+      findFirst: vi.fn().mockImplementation(async () => state.current), findMany: vi.fn().mockImplementation(async () => [state.current]),
       create: vi.fn().mockResolvedValue(current), update: vi.fn().mockResolvedValue(record('ENDED')),
-      updateMany: vi.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: vi.fn().mockResolvedValue(record('LIVE')),
+      updateMany: vi.fn().mockImplementation(async (query: { where: { status?: { in: string[] } }; data: { status: 'LIVE' | 'SCHEDULED' | 'ENDED' | 'TERMINATED'; endedAt?: Date; startedAt?: Date } }) => {
+        if (query.where.status && !query.where.status.in.includes(state.current.status)) return { count: 0 };
+        state.current = { ...state.current, ...query.data };
+        return { count: 1 };
+      }),
+      findUniqueOrThrow: vi.fn().mockImplementation(async () => state.current),
     },
     user: { findFirst: vi.fn().mockResolvedValue({ id: ownerId }) },
     $queryRaw: vi.fn().mockResolvedValue([]), $transaction: vi.fn(),
@@ -37,7 +43,7 @@ function fixture(current = record()) {
     createRoom: vi.fn().mockResolvedValue(undefined), deleteRoom: vi.fn().mockResolvedValue(undefined),
     token: vi.fn().mockResolvedValue({ token: 'fixture-token', url: 'ws://localhost:7880' }),
   };
-  return { db, media, service: new StreamsService(db as unknown as DatabaseService, media as unknown as LiveKitService) };
+  return { db, media, state, service: new StreamsService(db as unknown as DatabaseService, media as unknown as LiveKitService) };
 }
 
 describe('LiveKit signed media grants', () => {
@@ -184,7 +190,7 @@ describe('livestream authorization and genuine media state', () => {
   it('ends the real media room before committing its ended state', async () => {
     const { service, media, db } = fixture();
     expect(await service.end(streamId, ownerId)).toMatchObject({ status: 'ENDED', viewerCount: 0 });
-    expect(media.deleteRoom.mock.invocationCallOrder[0]).toBeLessThan(db.liveStream.update.mock.invocationCallOrder[0]!);
+    expect(media.deleteRoom.mock.invocationCallOrder[0]).toBeLessThan(db.liveStream.updateMany.mock.invocationCallOrder[0]!);
   });
   it('does not advertise a broadcaster without connected tracks as live content', async () => {
     const { service, media } = fixture();
@@ -206,7 +212,7 @@ describe('livestream authorization and genuine media state', () => {
   it('stops an inactive creator room and refuses additional viewer credentials', async () => {
     const inactive = record(); inactive.creator.status = 'SUSPENDED'; const { service, media, db } = fixture(inactive);
     await expect(service.viewerToken(streamId)).rejects.toBeInstanceOf(NotFoundException);
-    expect(media.deleteRoom).toHaveBeenCalledWith(inactive.livekitRoom); expect(db.liveStream.update).toHaveBeenCalled(); expect(media.token).not.toHaveBeenCalled();
+    expect(media.deleteRoom).toHaveBeenCalledWith(inactive.livekitRoom); expect(db.liveStream.updateMany).toHaveBeenCalled(); expect(media.token).not.toHaveBeenCalled();
   });
   it('reserves a room as scheduled and supplies publishing access to its creator only', async () => {
     const { service, media, db } = fixture(record('SCHEDULED')); db.liveStream.findFirst.mockResolvedValue(null);
@@ -219,7 +225,7 @@ describe('livestream authorization and genuine media state', () => {
     const { service, media, db } = fixture(record('SCHEDULED')); db.liveStream.findFirst.mockResolvedValue(null);
     media.createRoom.mockRejectedValue(new Error('unreachable'));
     await expect(service.create(ownerId, { title: 'Broadcast' })).rejects.toBeInstanceOf(ServiceUnavailableException);
-    expect(media.deleteRoom).toHaveBeenCalled(); expect(db.liveStream.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'ENDED' }) }));
+    expect(media.deleteRoom).toHaveBeenCalled(); expect(db.liveStream.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'ENDED' }) }));
     expect(media.token).not.toHaveBeenCalled();
   });
   it('rejects blank titles and a second active stream before allocating a media room', async () => {
@@ -228,6 +234,94 @@ describe('livestream authorization and genuine media state', () => {
     expect(db.liveStream.create).not.toHaveBeenCalled();
     await expect(service.create(ownerId, { title: 'Second room' })).rejects.toBeInstanceOf(ConflictException);
     expect(media.createRoom).not.toHaveBeenCalled();
+  });
+});
+
+describe('administrative termination and suspension races', () => {
+  it('preserves a moderation termination while an owner end request waits for the media server', async () => {
+    const { service, media, state, db } = fixture();
+    const terminal = record('TERMINATED');
+    media.deleteRoom.mockImplementation(async () => { state.current = terminal; });
+    expect(await service.end(streamId, ownerId)).toMatchObject({ status: 'TERMINATED', endedAt: terminal.endedAt, viewerCount: 0 });
+    expect(state.current).toBe(terminal);
+    expect(db.liveStream.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: streamId, status: { in: ['SCHEDULED', 'LIVE'] } } }));
+    expect(db.liveStream.update).not.toHaveBeenCalled();
+  });
+
+  it('does not downgrade a concurrently terminated vanished room or return a stale publishing snapshot', async () => {
+    const vanished = fixture();
+    vanished.media.rooms.mockImplementation(async () => { vanished.state.current = record('TERMINATED'); return new Set(); });
+    expect(await vanished.service.get(streamId)).toMatchObject({ status: 'TERMINATED', mediaAvailable: false });
+
+    const stalePresence = fixture();
+    stalePresence.media.presence.mockImplementation(async () => {
+      stalePresence.state.current = record('TERMINATED');
+      return { viewerCount: 3, publisherConnected: true, publisherHasTracks: true };
+    });
+    expect((await stalePresence.service.list({})).items).toEqual([]);
+    expect(stalePresence.state.current.status).toBe('TERMINATED');
+  });
+
+  it('preserves termination when cleanup of an inactive creator was already in flight', async () => {
+    const current = record(); current.creator.status = 'SUSPENDED';
+    const { service, media, state, db } = fixture(current);
+    const terminal = { ...record('TERMINATED'), creator: current.creator };
+    media.deleteRoom.mockImplementation(async () => { state.current = terminal; });
+    await expect(service.viewerToken(streamId)).rejects.toBeInstanceOf(NotFoundException);
+    expect(state.current).toBe(terminal);
+    expect(db.liveStream.update).not.toHaveBeenCalled();
+    expect(media.token).not.toHaveBeenCalled();
+  });
+
+  it('keeps the scheduled-room grace period from hiding a newly committed termination', async () => {
+    const { service, media, state } = fixture(record('SCHEDULED'));
+    media.rooms.mockImplementation(async () => { state.current = record('TERMINATED'); return new Set(); });
+    expect(await service.get(streamId)).toMatchObject({ status: 'TERMINATED', mediaAvailable: false });
+  });
+
+  it('cleans a newly created room and withholds credentials if the creator was suspended during room creation', async () => {
+    const { service, media, db, state } = fixture(record('SCHEDULED'));
+    db.liveStream.findFirst.mockResolvedValue(null);
+    media.createRoom.mockImplementation(async () => { db.user.findFirst.mockResolvedValue(null); });
+    await expect(service.create(ownerId, { title: 'Broadcast' })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(media.deleteRoom).toHaveBeenCalledWith('livestar-test-room');
+    expect(state.current.status).toBe('ENDED');
+    expect(db.liveStream.update).not.toHaveBeenCalled();
+  });
+
+  it('withholds a signed create response and preserves termination committed while signing', async () => {
+    const { service, media, db, state } = fixture(record('SCHEDULED'));
+    db.liveStream.findFirst.mockResolvedValue(null);
+    const terminal = record('TERMINATED');
+    media.token.mockImplementation(async () => { state.current = terminal; return { token: 'not-returned', url: 'ws://localhost:7880' }; });
+    await expect(service.create(ownerId, { title: 'Broadcast' })).rejects.toBeInstanceOf(ConflictException);
+    expect(media.deleteRoom).toHaveBeenCalledWith('livestar-test-room');
+    expect(state.current).toBe(terminal);
+    expect(db.liveStream.update).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite termination when failed room creation also needs cleanup', async () => {
+    const { service, media, db, state } = fixture(record('SCHEDULED'));
+    db.liveStream.findFirst.mockResolvedValue(null);
+    const terminal = record('TERMINATED');
+    media.createRoom.mockImplementation(async () => { state.current = terminal; throw new Error('provider failure'); });
+    await expect(service.create(ownerId, { title: 'Broadcast' })).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(state.current).toBe(terminal);
+    expect(media.token).not.toHaveBeenCalled();
+  });
+
+  it('rechecks eligibility after host signing without holding a database transaction during provider calls', async () => {
+    const { service, media, db } = fixture();
+    media.token.mockImplementation(async () => { db.user.findFirst.mockResolvedValue(null); return { token: 'not-returned', url: 'ws://localhost:7880' }; });
+    await expect(service.hostToken(streamId, ownerId)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(media.token.mock.invocationCallOrder[0]).toBeLessThan(db.$transaction.mock.invocationCallOrder[0]!);
+    expect(db.user.findFirst).toHaveBeenCalledWith({ where: { id: ownerId, status: 'ACTIVE', deletedAt: null }, select: { id: true } });
+  });
+
+  it('refuses a new viewer token if the stream terminates while signing it', async () => {
+    const { service, media, state } = fixture();
+    media.token.mockImplementation(async () => { state.current = record('TERMINATED'); return { token: 'not-returned', url: 'ws://localhost:7880' }; });
+    await expect(service.viewerToken(streamId)).rejects.toBeInstanceOf(ConflictException);
   });
 });
 

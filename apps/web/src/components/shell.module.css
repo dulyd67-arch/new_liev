@@ -16,6 +16,8 @@
 .footer :global(.brand-icon){width:29px;height:31px}
 .mobileNavigation{display:none}
 .accountAvatar{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+.adminLink{color:#d5b1f5;background:#a77ee012;border-color:#a77ee025;min-width:36px;min-height:36px}
+.adminLink[aria-current=page]{color:#edcf99;border-color:#e0ba7455;background:#e0ba7415}
 @media(max-width:1050px){.shell .header{padding-inline:24px;gap:15px}.shell .header :global(.main-navigation){margin-inline-start:5px}.header :global(.nav-link){padding-inline:11px}.header :global(.account-name){display:none}}
 @media(max-width:760px){
   .shell .header{height:68px;padding:0 18px;gap:12px;justify-content:space-between}

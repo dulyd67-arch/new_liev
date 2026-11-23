@@ -42,7 +42,9 @@
     "test:pk:integration": "node --test scripts/pk.integration.test.mjs",
     "test:pk:browser": "node --test scripts/pk.browser.test.mjs",
     "test:profile:integration": "node --test scripts/profile.integration.test.mjs",
-    "test:profile:browser": "node --test scripts/profile.browser.test.mjs"
+    "test:profile:browser": "node --test scripts/profile.browser.test.mjs",
+    "test:admin:integration": "node --test scripts/admin.integration.test.mjs",
+    "test:admin:browser": "node --test scripts/admin.browser.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",

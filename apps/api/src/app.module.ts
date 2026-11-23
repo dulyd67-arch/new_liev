@@ -11,9 +11,10 @@ import { PlatformController } from './platform.controller';
 import { DuModule } from './du/du.module';
 import { SocialModule } from './social/social.module';
 import { BattlesModule } from './battles/battles.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
-  imports: [CoreModule, AuthModule, UsersModule, StreamsModule, DuModule, SocialModule, BattlesModule, ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
+  imports: [CoreModule, AuthModule, UsersModule, StreamsModule, DuModule, SocialModule, BattlesModule, AdminModule, ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
   controllers: [HealthController, PlatformController],
   providers: [
     { provide: DEPENDENCY_PROBE, useClass: DependencyProbeService },
