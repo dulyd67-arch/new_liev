@@ -1,0 +1,264 @@
+name: LiveStar Android APK and Play bundle
+
+on:
+  push:
+    paths:
+      - 'apps/mobile/**'
+      - '.github/workflows/android.yml'
+      - 'scripts/check-android-artifacts.py'
+  pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - '.github/workflows/android.yml'
+      - 'scripts/check-android-artifacts.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: livestar-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/mobile
+        shell: bash
+    env:
+      FLUTTER_VERSION: '3.38.3'
+      FLUTTER_FRAMEWORK_REVISION: '19074d12f7eaf6a8180cd4036a430c1d76de904e'
+      LIVESTAR_WEB_URL: 'https://livestar-live-nitq.onrender.com'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up the pinned Flutter SDK
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: '3.38.3'
+          cache: false
+
+      - name: Verify SDK identity
+        run: |
+          flutter --version --machine > /tmp/livestar-flutter-version.json
+          python3 - <<'PY'
+          import json, os
+          with open('/tmp/livestar-flutter-version.json') as source:
+              version = json.load(source)
+          assert version['frameworkVersion'] == os.environ['FLUTTER_VERSION'], version
+          assert version['frameworkRevision'] == os.environ['FLUTTER_FRAMEWORK_REVISION'], version
+          print('Pinned Flutter framework verified.')
+          PY
+
+      - name: Install required Android packages
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          subprocess.run(
+              ['sdkmanager', '--licenses'],
+              input='y\n' * 100,
+              text=True,
+              stdout=subprocess.DEVNULL,
+              check=True,
+          )
+          PY
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+
+      - name: Resolve Dart dependencies
+        run: flutter pub get
+
+      - name: Format and validate Dart source
+        run: |
+          dart format lib test
+          git diff -- lib test > /tmp/livestar-dart-format.patch
+
+      - name: Analyze Flutter source
+        run: flutter analyze --no-pub
+
+      - name: Run Flutter and navigation policy tests
+        run: flutter test --no-pub
+
+      - name: Build an installable test APK
+        run: |
+          chmod +x android/gradlew
+          flutter build apk --debug --no-pub --target-platform android-arm64 \
+            --dart-define="LIVESTAR_WEB_URL=$LIVESTAR_WEB_URL"
+
+      - name: Run native Android policy tests
+        working-directory: apps/mobile/android
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Verify and package the actual APK
+        working-directory: .
+        run: |
+          python3 scripts/check-android-artifacts.py \
+            --apk apps/mobile/build/app/outputs/flutter-apk/app-debug.apk \
+            --build-tools "$ANDROID_HOME/build-tools/36.0.0" \
+            --package-id com.livestar.live \
+            --output-dir artifacts/android
+          cp apps/mobile/pubspec.lock artifacts/android/pubspec.lock
+          cp /tmp/livestar-flutter-version.json artifacts/android/flutter-version.json
+          git rev-parse HEAD > artifacts/android/source-commit.txt
+          printf '%s\n' \
+            'LiveStar Android test build' \
+            '' \
+            'This APK is a debug-signed build for installation and device testing.' \
+            'It is not a Google Play release and does not contain a production signing key.' \
+            'It connects to https://livestar-live-nitq.onrender.com and requires internet access.' \
+            'The phone AI host is experimental and depends on device capability and the deployed web version.' \
+            'No physical Android device test is implied by this build.' \
+            'Debug signing keys are temporary; a later build may require uninstalling this one.' \
+            > artifacts/android/READ-ME.txt
+
+      - name: Upload APK and verification receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LiveStar-Android-test-${{ github.sha }}
+          path: artifacts/android/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Build the unsigned Google Play release bundle
+        run: |
+          flutter build appbundle --release --no-pub \
+            --dart-define="LIVESTAR_WEB_URL=$LIVESTAR_WEB_URL"
+
+      - name: Build the unsigned ARM64 release APK
+        working-directory: apps/mobile/android
+        run: |
+          # Use the Android task directly: no debug-key fallback, and no
+          # Flutter CLI assumption that an unsigned APK has a signed filename.
+          livestar_dart_define="$(printf 'LIVESTAR_WEB_URL=%s' "$LIVESTAR_WEB_URL" | base64 -w 0)"
+          ./gradlew :app:assembleRelease --no-daemon \
+            -Ptarget-platform=android-arm64 -Psplit-per-abi=true \
+            -Pdart-defines="$livestar_dart_define"
+
+      - name: Obtain the pinned official bundle validator
+        working-directory: .
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            'https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar' \
+            --output /tmp/livestar-bundletool-1.18.3.jar
+          printf '%s\n' \
+            'a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  /tmp/livestar-bundletool-1.18.3.jar' \
+            | sha256sum --check -
+
+      - name: Verify unsigned release artifacts
+        working-directory: .
+        run: |
+          python3 scripts/check-android-artifacts.py \
+            --bundle apps/mobile/build/app/outputs/bundle/release/app-release.aab \
+            --bundletool /tmp/livestar-bundletool-1.18.3.jar \
+            --package-id com.livestar.live \
+            --output-dir artifacts/android-play
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          candidates = sorted(
+              Path('apps/mobile/build/app/outputs/apk/release').glob('*arm64*v8a*release*.apk'),
+              key=lambda path: (not path.name.endswith('-unsigned.apk'), path.name),
+          )
+          assert candidates, 'The unsigned ARM64 release APK was not generated.'
+          subprocess.run([
+              'python3', 'scripts/check-android-artifacts.py', '--release',
+              '--apk', str(candidates[0]),
+              '--build-tools', str(Path(__import__('os').environ['ANDROID_HOME']) / 'build-tools/36.0.0'),
+              '--package-id', 'com.livestar.live',
+              '--output-dir', 'artifacts/android-release',
+          ], check=True)
+          PY
+          cp apps/mobile/pubspec.lock artifacts/android-play/pubspec.lock
+          cp /tmp/livestar-flutter-version.json artifacts/android-play/flutter-version.json
+          cp /tmp/livestar-dart-format.patch artifacts/android-play/source-format.patch
+          git rev-parse HEAD > artifacts/android-play/source-commit.txt
+          git rev-parse HEAD > artifacts/android-release/source-commit.txt
+          printf '%s\n' \
+            'LiveStar Google Play release bundle — unsigned' \
+            '' \
+            'This is an actual release AAB, validated by pinned official bundletool.' \
+            'Sign it with the owner upload key outside public source/CI before Play Console upload.' \
+            'No Google Play account has been activated or accessed by this workflow.' \
+            'Store registration, verification, testing and review remain separate steps.' \
+            'No production signing key or keystore is included.' \
+            > artifacts/android-play/READ-ME.txt
+          printf '%s\n' \
+            'LiveStar ARM64 release APK — unsigned' \
+            '' \
+            'This APK is not installable until signed with the owner private key.' \
+            'The built APK passed 16 KB ZIP alignment and ARM64 ELF LOAD alignment checks.' \
+            'Use the included official Android SDK apksigner JAR to sign and verify a copy.' \
+            'Signing tools are not embedded in the application.' \
+            > artifacts/android-release/READ-ME.txt
+
+      - name: Include the official APK signing tool for private owner signing
+        working-directory: .
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+          sdk = Path(os.environ['ANDROID_HOME']) / 'build-tools/36.0.0'
+          destination = Path('artifacts/android-release/tools')
+          destination.mkdir(parents=True, exist_ok=True)
+          tool = sdk / 'lib/apksigner.jar'
+          assert tool.is_file(), 'The official Android SDK apksigner JAR is missing.'
+          shutil.copyfile(tool, destination / 'apksigner.jar')
+          with tool.open('rb') as source:
+              digest = hashlib.file_digest(source, 'sha256').hexdigest()
+          copied_notices = []
+          for name in ('NOTICE.txt', 'NOTICE', 'source.properties'):
+              if (sdk / name).is_file():
+                  shutil.copyfile(sdk / name, destination / name)
+                  copied_notices.append(name)
+          (destination / 'provenance.json').write_text(json.dumps({
+              'source': 'Official Android SDK build-tools;36.0.0 installed by sdkmanager',
+              'tool': 'lib/apksigner.jar',
+              'sha256': digest,
+              'noticesIncluded': copied_notices,
+              'embeddedInApplication': False,
+          }, indent=2) + '\n')
+          with Path('artifacts/android-release/SHA256SUMS.txt').open('a') as checksums:
+              checksums.write(digest + '  tools/apksigner.jar\n')
+          PY
+
+      - name: Upload the small unsigned Google Play bundle artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LiveStar-Google-Play-unsigned-${{ github.sha }}
+          path: artifacts/android-play/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload the unsigned ARM64 APK and private-signing tool artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LiveStar-Android-release-unsigned-${{ github.sha }}
+          path: artifacts/android-release/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload native test reports if a check fails
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: LiveStar-Android-test-reports-${{ github.run_id }}
+          path: |
+            apps/mobile/build/app/reports/tests/
+            apps/mobile/android/app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 7

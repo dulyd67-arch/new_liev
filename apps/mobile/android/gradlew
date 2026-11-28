@@ -1,0 +1,29 @@
+#!/bin/sh
+# Source-only bootstrap: official Gradle distribution and fixed integrity hash.
+set -eu
+version=8.14
+checksum=61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa
+cache_root="${GRADLE_USER_HOME:-${HOME}/.gradle}/livestar-wrapper"
+gradle_path="${cache_root}/gradle-${version}/bin/gradle"
+if [ ! -x "$gradle_path" ]; then
+    mkdir -p "$cache_root"
+    task_dir=$(mktemp -d "${cache_root}/download.XXXXXX")
+    trap 'rm -r "$task_dir"' EXIT HUP INT TERM
+    distribution="${task_dir}/gradle.zip"
+    curl --fail --location --proto '=https' --tlsv1.2 \
+        "https://services.gradle.org/distributions/gradle-${version}-bin.zip" \
+        --output "$distribution"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$distribution" | cut -d ' ' -f 1)
+    else
+        actual=$(shasum -a 256 "$distribution" | cut -d ' ' -f 1)
+    fi
+    [ "$actual" = "$checksum" ] || { echo "Gradle integrity verification failed." >&2; exit 1; }
+    unzip -q "$distribution" -d "$task_dir"
+    if [ ! -d "${cache_root}/gradle-${version}" ]; then
+        mv "${task_dir}/gradle-${version}" "$cache_root/"
+    fi
+    rm -r "$task_dir"
+    trap - EXIT HUP INT TERM
+fi
+exec "$gradle_path" "$@"

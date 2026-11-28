@@ -1,0 +1,7 @@
+/.gradle/
+/captures/
+/local.properties
+/key.properties
+*.jks
+*.keystore
+/gradle/wrapper/gradle-wrapper.jar
