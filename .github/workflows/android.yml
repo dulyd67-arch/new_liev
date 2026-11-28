@@ -66,24 +66,37 @@ jobs:
       - name: Install required Android packages
         run: |
           python3 - <<'PY'
-          import subprocess
+          import os, subprocess
+          from pathlib import Path
+          sdk_roots = [
+              Path(value) for key in ('ANDROID_HOME', 'ANDROID_SDK_ROOT')
+              if (value := os.environ.get(key)) and Path(value).is_dir()
+          ]
+          assert sdk_roots, 'The runner does not expose an installed Android SDK directory.'
+          sdk_root = sdk_roots[0]
+          candidates = [sdk_root / 'cmdline-tools/latest/bin/sdkmanager']
+          candidates += sorted((sdk_root / 'cmdline-tools').glob('*/bin/sdkmanager'), reverse=True)
+          sdkmanager = next((path for path in candidates if path.is_file() and os.access(path, os.X_OK)), None)
+          assert sdkmanager is not None, 'The Android SDK command-line manager was not found in the installed SDK.'
+          command = [str(sdkmanager), '--sdk_root=' + str(sdk_root)]
           subprocess.run(
-              ['sdkmanager', '--licenses'],
+              command + ['--licenses'],
               input='y\n' * 100,
               text=True,
               stdout=subprocess.DEVNULL,
               check=True,
           )
+          subprocess.run(
+              command + ['platforms;android-36', 'build-tools;36.0.0', 'ndk;28.2.13676358'],
+              check=True,
+          )
           PY
-          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
 
       - name: Resolve Dart dependencies
         run: flutter pub get
 
-      - name: Format and validate Dart source
-        run: |
-          dart format lib test
-          git diff -- lib test > /tmp/livestar-dart-format.patch
+      - name: Validate Dart source syntax
+        run: dart format --output=none lib test
 
       - name: Analyze Flutter source
         run: flutter analyze --no-pub
@@ -183,7 +196,6 @@ jobs:
           PY
           cp apps/mobile/pubspec.lock artifacts/android-play/pubspec.lock
           cp /tmp/livestar-flutter-version.json artifacts/android-play/flutter-version.json
-          cp /tmp/livestar-dart-format.patch artifacts/android-play/source-format.patch
           git rev-parse HEAD > artifacts/android-play/source-commit.txt
           git rev-parse HEAD > artifacts/android-release/source-commit.txt
           printf '%s\n' \
